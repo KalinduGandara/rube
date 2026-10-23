@@ -139,6 +139,12 @@ As an author, I want one `Machine` object that holds everything, so that my scri
 - THE SYSTEM SHALL ship `docs/API_FOR_LLM.md` (< 300 lines): conventions, every public signature with defaults, anchors, report format, all issue codes with typical fixes, examples A3/A5/A6, rules of thumb, and the final default physics values.
 - THE SYSTEM SHALL ship a README with setup and usage.
 
+### FR-028 Claude Code skill for machine authors (post-v1 request, 2026-10-24)
+As a Claude Code user, I want a `rube` skill, so that Claude can design, simulate and iterate on a machine without re-learning the workflow each time.
+- THE SYSTEM SHALL ship a project skill at `.claude/skills/rube/SKILL.md` that points to `docs/API_FOR_LLM.md` as the single API reference (no duplicated API listing) and prescribes the loop: plan stages with success criteria → write script → `rube check` until clean → `rube run` → summarize report → inspect stills → fix → repeat.
+- THE SYSTEM SHALL ship `.claude/skills/rube/scripts/summarize_report.py` (stdlib only) that prints status, all issues, one line per dynamic entity and the event timeline from a `report.json` or output directory, and states how many lines it omitted when truncating.
+- WHEN the summarizer is given a missing or malformed report, IT SHALL exit non-zero with a one-line error.
+
 ## Non-functional requirements
 
 - **NFR-001 Layer isolation (§3.1).** No module outside `rube/blender/` imports `bpy`, `bmesh` or `mathutils`. Verified by a unit test that scans the source.

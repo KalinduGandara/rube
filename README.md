@@ -40,6 +40,10 @@ out/blender.log        Blender stdout/stderr
 See `docs/API_FOR_LLM.md` (compact API reference with examples, meant to be pasted into an
 LLM prompt) and `examples/`.
 
+In Claude Code, the project skill `.claude/skills/rube/` (invoke with `/rube` or just ask for a
+machine) runs the design → check → run → read report → fix loop, and
+`.claude/skills/rube/scripts/summarize_report.py out/<name>` turns a report into a short summary.
+
 ## Testing
 
 ```

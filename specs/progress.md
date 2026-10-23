@@ -32,6 +32,7 @@ Append one line per completed task: `YYYY-MM-DD T-NNN <summary> — <tests> — 
 
 - 2026-10-24 T-002 Probe (tests/blender/probe_api.py, conftest.py, test_probe.py) confirmed complete — probe passes on Blender 5.2.3 (box was left unticked by the M0 agent).
 - 2026-10-24 T-019 Verification: review in specs/review.md; findings 1–9 fixed, 10 resolved by spec (FR-021 amended, D-18); full gate unit 375 / Blender 18 / ruff clean; overlap, import-bypass and endless-loop repros re-checked by hand.
+- 2026-10-24 T-020 Claude Code skill .claude/skills/rube (SKILL.md: plan stages → check → run → summarize → inspect stills → diagnose table; scripts/summarize_report.py stdlib summarizer with counted truncation) — unit test_skill.py 4 passed, summarizer verified on real out/a5 report, ruff clean.
 
 ## Physics default changes (assumption A-1)
 
@@ -71,6 +72,7 @@ Final state 2026-10-24: unit 375 passed, Blender 18 passed, ruff clean. `U:` = `
 | FR-025 Report | U:test_report.py, test_cli_run.py::test_framework_bug_still_writes_report; B:A1 | |
 | FR-026 Probe | B:tests/blender/test_probe.py | |
 | FR-027 Docs | U:test_docs.py (examples pass check, < 300 lines, defaults, public names, README) | |
+| FR-028 Claude skill | U:test_skill.py | |
 | NFR-001 Layer isolation | U:test_layering.py | |
 | NFR-002 Dependencies | U:test_dependencies.py | |
 | NFR-003 bpy discipline | U:test_layering.py | |

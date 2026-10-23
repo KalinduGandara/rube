@@ -13,6 +13,11 @@ describing Rube Goldberg machines; `rube run` simulates them in headless Blender
   `specs/progress.md`, then continue from the first unchecked task.**
 - Spec and code must never drift: change `requirements.md`/`design.md`/`tasks.md` first.
 
+## Building machines
+
+To design or run a machine (not change the framework), use the `rube` skill in
+`.claude/skills/rube/`. Author scripts go in `machines/`, outputs in `out/` (gitignored).
+
 ## Stack
 
 - Layer 1 + CLI: Python ≥ 3.11 stdlib only (`src/rube/`, never imports `bpy`/`bmesh`/`mathutils`).

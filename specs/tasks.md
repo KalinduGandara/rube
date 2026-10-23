@@ -93,3 +93,9 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 - [x] T-019: Full suite + ruff; traceability matrix in `progress.md`; fresh-eyes review against `requirements.md`; fix findings.
   - Requirements: all
   - Done when: every FR/NFR maps to ≥ 1 passing test or is flagged.
+
+## Post-v1
+
+- [x] T-020: Claude Code skill `.claude/skills/rube/` (SKILL.md + `scripts/summarize_report.py`); unit test for the summarizer; README/CLAUDE.md pointers.
+  - Requirements: FR-028
+  - Done when: `tests/unit/test_skill.py` passes (summary of a sample report, truncation note, bad input exit code, SKILL.md references the API doc and the summarizer); summarizer run on a real `rube run` output; ruff clean.

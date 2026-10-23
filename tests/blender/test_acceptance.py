@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from rube.entities import DEFAULTS
 from rube.generators import SpiralRamp
 from rube.report import still_frames
 from rube.script import load_machine
@@ -52,6 +53,61 @@ def write_script(tmp_path, name, source):
     return path
 
 
+#: Collision shape per entity type (SPEC section 5; FR-020).
+SHAPES = {
+    "Floor": "BOX", "Ball": "SPHERE", "Block": "BOX", "Domino": "BOX", "Ramp": "BOX",
+    "LeverPlank": "BOX", "Fulcrum": "CONVEX_HULL", "SupportColumn": "CONVEX_HULL",
+    "SpiralTrack": "MESH",
+}  # fmt: skip
+
+
+def expected_scene(out_dir, video=False):
+    """Expected Blender settings of the machine in ``out_dir/spec.json``, from the spec text.
+
+    Entity names and types come from the author's script (``spec.json``); every physics
+    value comes from the ``DEFAULTS`` table, the shapes from SPEC section 5, the scene
+    values from FR-019 / FR-007 / FR-014 - never from reading the built scene back.
+    """
+    spec = json.loads((out_dir / "spec.json").read_text())
+    bodies = {}
+    for ent in spec["entities"]:
+        row = DEFAULTS[ent["type"]]
+        mass = row.mass
+        if mass is None:  # density-derived: Block and Domino are plain boxes
+            mass = row.density * math.prod(ent["size"])
+        # FR-007: dominoes deactivate when idle and start asleep unless pre-tilted.
+        domino = ent["type"] == "Domino"
+        bodies[ent["name"]] = {
+            "type": ent["type"], "shape": SHAPES[ent["type"]], "dynamic": row.dynamic,
+            "friction": row.friction, "restitution": row.bounciness,
+            "linear_damping": row.linear_damping, "angular_damping": row.angular_damping,
+            "margin": row.margin, "mass": mass,
+            "use_deactivation": domino,
+            "use_start_deactivated": domino and ent["tilt_deg"] == 0,
+        }  # fmt: skip
+    return {
+        "fps": 24,
+        "frame_end": 1 + math.ceil(spec["duration"] * 24),
+        "bodies": bodies,
+        "hinges": {c["name"]: {"disable_collisions": True} for c in spec["constraints"]},
+        "camera": spec["camera"]["mode"],
+        "video": video,
+    }
+
+
+def check_scene(out_dir, blender_exe, video=False):
+    """Run ``check_scene.py`` inside Blender on ``out_dir/machine.blend`` (FR-019/020/...)."""
+    expect = out_dir / "expected_scene.json"
+    expect.write_text(json.dumps(expected_scene(out_dir, video)))
+    proc = subprocess.run(
+        [str(blender_exe), "-b", str(out_dir / "machine.blend"), "--python",
+         str(ROOT / "tests" / "blender" / "check_scene.py"), "--", "--expect", str(expect)],
+        capture_output=True, text=True, timeout=120,
+    )  # fmt: skip
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "checked: 0 failure(s)" in proc.stdout
+
+
 def test_a1_ball_drop(tmp_path, blender_exe):
     """A1: ball dropped from 1 m -> ok; final z = radius +- 0.01; at rest; no warnings."""
     code, report, output = rube_run(EXAMPLES / "a1_ball_drop.py", tmp_path, blender_exe)
@@ -68,6 +124,7 @@ def test_a1_ball_drop(tmp_path, blender_exe):
     assert report["blender_version"].startswith("5.2")
     assert report["artifacts"]["blend"] == "machine.blend"
     assert (tmp_path / "machine.blend").is_file()
+    check_scene(tmp_path, blender_exe)  # FR-019, FR-020, FR-002
 
 
 def test_a1_determinism(tmp_path, blender_exe):
@@ -196,6 +253,7 @@ def test_a3_straight_chain(tmp_path, blender_exe):
     ordered = [frames[d["name"]] for d in chain]
     assert all(a < b for a, b in zip(ordered, ordered[1:], strict=False)), ordered
     assert "UNSTABLE" not in {i["code"] for i in report["issues"]}
+    check_scene(tmp_path, blender_exe)  # FR-007: Domino_1 tilted -> active, the rest asleep
 
 
 def test_a4_curved_chain(tmp_path, blender_exe):
@@ -291,6 +349,7 @@ def test_a12_follow_camera_video(tmp_path, blender_exe):
     )  # fmt: skip
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stdout.count(": x=") == len(frames)
+    check_scene(tmp_path, blender_exe, video=True)  # FR-014 constraints, FR-024 H264
 
 
 def test_a6_ball_through_spiral(tmp_path, blender_exe):
@@ -339,6 +398,7 @@ def test_a7_lever(tmp_path, blender_exe):
     assert plank["final_position"][2] == pytest.approx(0.525, abs=0.3)
     assert abs(plank["final_position"][0]) < 0.05 and abs(plank["final_position"][1]) < 0.05
     assert entity(report, "Ball_1")["left_bounds"] is False
+    check_scene(tmp_path, blender_exe)  # FR-012: HINGE with disable_collisions
 
 
 def test_overlap_skips_hinged_pairs_with_collisions_disabled(tmp_path, blender_exe):

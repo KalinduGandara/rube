@@ -2,8 +2,8 @@
 
 Each test runs ``python -m rube.cli run <script> --out <tmp>`` (Blender found via
 ``RUBE_BLENDER`` or the default path, see ``conftest.py``) and asserts on ``report.json``.
-Milestone M2 covers A1, A8, A11 and determinism (A1 twice, NFR-004); later milestones add
-the other scenarios here.
+Milestone M2 covers A1, A8, A11 and determinism (A1 twice, NFR-004); M3 adds A2-A5 and A9
+(A5 twice); later milestones add the other scenarios here.
 """
 
 import json
@@ -172,3 +172,36 @@ def test_a4_curved_chain(tmp_path, blender_exe):
     assert len(chain) >= 10
     assert [d["name"] for d in chain if not d["fell_over"]] == []
     assert "UNSTABLE" not in {i["code"] for i in report["issues"]}
+
+
+def started_frames(report):
+    """Entity name -> frame of its ``started_moving`` event."""
+    return {e["entity"]: e["frame"] for e in report["events"] if e["event"] == "started_moving"}
+
+
+def test_a5_ball_ramp_chain(tmp_path, blender_exe):
+    """A5 / FR-008, FR-011: ball -> ramp -> untilted chain: the first domino starts moving
+    after the ball does, and the last domino fell over."""
+    code, report, output = rube_run(EXAMPLES / "a5_ball_ramp_chain.py", tmp_path, blender_exe)
+    assert code == 0, output
+    assert report["status"] == "ok", report
+    assert "UNSTABLE" not in {i["code"] for i in report["issues"]}
+    chain = dominoes(report)
+    assert len(chain) >= 10
+    started = started_frames(report)
+    assert started["Ball_1"] < started[chain[0]["name"]]
+    assert chain[-1]["fell_over"] is True
+
+
+def test_a9_ball_ramp_chain_determinism(tmp_path, blender_exe):
+    """A9 / NFR-004: A5 run twice -> every final position identical to 1e-6."""
+    finals = []
+    for run in ("first", "second"):
+        script = EXAMPLES / "a5_ball_ramp_chain.py"
+        code, report, output = rube_run(script, tmp_path / run, blender_exe)
+        assert code == 0, output
+        finals.append({e["name"]: e["final_position"] for e in report["entities"]})
+    assert finals[0].keys() == finals[1].keys()
+    assert len(finals[0]) >= 11  # the ball and every domino
+    for name, first in finals[0].items():
+        assert finals[1][name] == pytest.approx(first, abs=1e-6), name

@@ -57,7 +57,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 - [x] T-012: `geometry.catmull_rom`, `ArcLengthTable`; `generators.domino_chain` + validation; examples + tests A3, A4.
   - Requirements: FR-011
   - Done when: spacing uniformity (< 1 mm), yaw follows tangent, CHAIN_* codes unit-tested; A3, A4 pass.
-- [ ] T-013: Ball → ramp → chain example; A5 and A9 (A5 twice, 1e-6).
+- [x] T-013: Ball → ramp → chain example; A5 and A9 (A5 twice, 1e-6).
   - Requirements: FR-008, FR-011, NFR-004
   - Done when: A5, A9 pass. Physics default changes (if any) recorded per assumption A-1.
 

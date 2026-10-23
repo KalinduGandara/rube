@@ -89,6 +89,9 @@ As an author, I want one `Machine` object that holds everything, so that my scri
 - THE SYSTEM SHALL parse the script with `ast` before executing it; WHEN it imports anything other than `rube`, `math`, `random` (incl. submodules of `rube`), or references `__import__`, `eval`, `exec`, `open`, THE SYSTEM SHALL report `DISALLOWED_IMPORT` and not execute it.
 - WHEN the script raises, THE SYSTEM SHALL report `SCRIPT_ERROR` with the line in the user script.
 - WHEN the script defines no top-level `machine` of type `Machine`, THE SYSTEM SHALL report `NO_MACHINE`.
+- THE SYSTEM SHALL allow only the public `rube` API modules (not `rube.cli`, `rube.script`, `rube.report`, `rube.blender*`), SHALL reject dunder attribute access and the names `__builtins__`, `getattr`, `setattr`, `delattr`, `globals`, `locals`, `vars`, `compile`, `breakpoint`, `input`, and SHALL execute the script with a curated set of builtins. (Review finding 3; still a guard rail, not a sandbox.)
+- WHEN the script runs longer than 30 s, THE SYSTEM SHALL stop it and report `SCRIPT_ERROR` (status `invalid`, report written). (Review finding 2.)
+- WHEN the script raises any exception including `BaseException` subclasses other than a real user interrupt, THE SYSTEM SHALL report `SCRIPT_ERROR`; WHEN the user interrupts `rube run`, THE SYSTEM SHALL still write `report.json` (status `internal_error`, "interrupted") before exiting. (Review finding 4.)
 
 ### FR-017 `rube check` (§10.1)
 - WHEN `rube check machine.py` runs, THE SYSTEM SHALL print all issues and exit 0 if there are no errors, else 2, without starting Blender.
@@ -109,7 +112,7 @@ As an author, I want one `Machine` object that holds everything, so that my scri
 - THE SYSTEM SHALL set rigid body type, shape, mass, friction, restitution, damping, `use_margin=True`, `collision_margin`, deactivation flags, and custom props `rube_name`, `rube_type`.
 
 ### FR-021 Overlap check (§8.5)
-- WHEN any two rigid bodies' geometry overlaps at frame 1 (AABB pre-filter, then BVH overlap), excluding pairs joined by a constraint with `disable_collisions`, THE SYSTEM SHALL report `OVERLAP` naming both, set status `invalid`, and SHALL NOT bake.
+- WHEN any two rigid bodies, at least one of them dynamic (passive–passive pairs are skipped, design D-18), overlap at frame 1 — including touching-coplanar and fully-contained configurations — excluding pairs joined by a constraint with `disable_collisions`, THE SYSTEM SHALL report `OVERLAP` naming both, set status `invalid`, and SHALL NOT bake.
 
 ### FR-022 Bake (§8.6)
 - THE SYSTEM SHALL free existing bakes, set frame 1, and bake under `temp_override(scene, point_cache)`.

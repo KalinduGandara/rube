@@ -21,6 +21,10 @@ from rube.blender.build import BuildContext
 from rube.errors import Issue, error
 from rube.vec import Vec3
 
+#: Depth (m) a probe point must lie inside a body to count as inside: far above float noise,
+#: far below ``CLEARANCE`` (2 mm), so touching or clearance-separated bodies never overlap.
+INSIDE_EPS = 1e-5
+
 
 class _Shape:
     """World-space triangles of one built body: AABB + BVH tree (design D-19)."""
@@ -34,6 +38,7 @@ class _Shape:
         self.tree = BVHTree.FromPolygons(self.vertices, polygons)
         self.lo = Vector(tuple(min(v[i] for v in self.vertices) for i in range(3)))
         self.hi = Vector(tuple(max(v[i] for v in self.vertices) for i in range(3)))
+        self.location = world.translation.copy()
 
     def aabb_overlap(self, other: _Shape) -> tuple[float, float, float] | None:
         """Extent (m) of the AABB intersection per axis, or ``None`` if they are apart."""
@@ -42,21 +47,43 @@ class _Shape:
         )
         return extent if all(e > 0 for e in extent) else None
 
-    def contains(self, point: Vector) -> bool:
-        """True if ``point`` is inside this closed mesh (faces wound outward).
+    def aabb_overlap_center(self, other: _Shape) -> Vector:
+        """Centre of the AABB intersection box (only meaningful when ``aabb_overlap`` is set)."""
+        return Vector(
+            tuple(
+                (max(self.lo[i], other.lo[i]) + min(self.hi[i], other.hi[i])) / 2 for i in range(3)
+            )
+        )
 
-        The nearest surface point's face normal points away from the inside, so a point
-        behind it is inside. Exact for convex shapes, which every v1 body is near contacts.
+    def contains(self, point: Vector) -> bool:
+        """True if ``point`` lies more than ``INSIDE_EPS`` inside this closed mesh.
+
+        The nearest surface point's face normal points away from the inside (faces wound
+        outward), so a point behind it is inside, at a depth of minus the dot product. Exact
+        for convex shapes, which every v1 body is near contacts. A point on the surface is
+        *not* inside: touching bodies are resting contact, not an overlap.
         """
         location, normal, _index, _distance = self.tree.find_nearest(point)
-        return location is not None and (point - location).dot(normal) < 0
+        return location is not None and (point - location).dot(normal) < -INSIDE_EPS
 
 
 def _intersect(a: _Shape, b: _Shape) -> bool:
-    """Surface triangles cross, or one body sits entirely inside the other."""
+    """Surface triangles cross, or some probe point lies strictly inside both bodies.
+
+    ``BVHTree.overlap`` alone misses two configurations (review finding 1, design D-27):
+    coplanar faces (two equal boxes side by side, overlapping along one axis -- no triangle
+    pair *crosses*, they only share planes) and a body contained in another with a face on
+    the other's surface. Both are caught by probing points that must lie inside *both*
+    shapes when they overlap: the centre of the AABB intersection box and each body's origin.
+    Probes are tested with a depth margin, so bodies touching or ``CLEARANCE`` apart (whose
+    AABBs do not even overlap) are never reported.
+    """
     if a.tree.overlap(b.tree):
         return True
-    return b.contains(a.vertices[0]) or a.contains(b.vertices[0])
+    if b.contains(a.vertices[0]) or a.contains(b.vertices[0]):
+        return True
+    probes = (a.aabb_overlap_center(b), a.location, b.location)
+    return any(a.contains(p) and b.contains(p) for p in probes)
 
 
 def check_overlaps(

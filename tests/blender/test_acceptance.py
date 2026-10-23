@@ -129,6 +129,34 @@ def test_overlap_containment_and_near_misses(tmp_path, blender_exe):
     assert [i["entity"] for i in report["issues"] if i["code"] == "OVERLAP"] == ["big,inside"]
 
 
+@pytest.mark.parametrize(
+    "bodies",
+    [
+        # Review finding 1, repro 1: same size, same z -> four faces coplanar (BVH misses it).
+        """
+        machine.add(Block(position=(0, 0, 0), size=(0.4, 0.4, 0.4), name="a"))
+        machine.add(Block(position=(0.1, 0, 0), size=(0.4, 0.4, 0.4), name="b"))
+        """,
+        # Repro 2: two dominoes 5 cm apart -> half inside each other, faces coplanar.
+        """
+        machine.add(Domino(position=(0, 0, 0), name="a"))
+        machine.add(Domino(position=(0.05, 0, 0), name="b"))
+        """,
+    ],
+    ids=["blocks", "dominoes"],
+)
+def test_overlap_coplanar_boxes(tmp_path, blender_exe, bodies):
+    """FR-021 (T-019 review finding 1): box pairs whose faces are coplanar still overlap."""
+    header = """
+        from rube import Block, Domino, Machine
+        machine = Machine(duration=1)
+        """
+    script = write_script(tmp_path, "machine.py", header + bodies)
+    code, report, output = rube_run(script, tmp_path / "out", blender_exe)
+    assert code == 2, output
+    assert [i["entity"] for i in report["issues"] if i["code"] == "OVERLAP"] == ["a,b"]
+
+
 def test_a2_ball_rolls_down_ramp(tmp_path, blender_exe):
     """A2 / FR-008: ball on a 20 deg ramp ends beyond ramp.bottom.x; no UNSTABLE warning."""
     code, report, output = rube_run(EXAMPLES / "a2_ball_down_ramp.py", tmp_path, blender_exe)

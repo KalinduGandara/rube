@@ -36,7 +36,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 - [x] T-007: `camera.py` (static, follow, auto_frame) + `to_dict`/`from_dict`.
   - Requirements: FR-014, FR-015
   - Done when: `test_camera.py` (auto frame contains bbox), `test_serialization.py` (round-trip equality, JSON-safe) pass.
-- [ ] T-008: `script.py` (AST guard, exec, NO_MACHINE, SCRIPT_ERROR) + `cli.py check` + `report.py` + `test_layering.py` (NFR-001 scan; NFR-003 ops whitelist + no `active_object`).
+- [x] T-008: `script.py` (AST guard, exec, NO_MACHINE, SCRIPT_ERROR) + `cli.py check` + `report.py` + `test_layering.py` (NFR-001 scan; NFR-003 ops whitelist + no `active_object`).
   - Requirements: FR-016, FR-017, FR-025, NFR-001, NFR-003, NFR-006
   - Done when: `test_script.py`, `test_cli_check.py`, `test_report.py`, `test_layering.py` pass; `rube check examples/a11_disallowed_import.py` exits 2 with DISALLOWED_IMPORT.
 

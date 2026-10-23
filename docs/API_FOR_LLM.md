@@ -18,7 +18,7 @@ Fix every `error` issue using its `hint`.
 
 ## API
 ```python
-from rube import Machine, Ball, Block, Domino, Ramp, Lever, Camera, domino_chain, spiral_ramp
+from rube import Machine, Ball, Block, Domino, Ramp, Lever, Camera, Vec3, domino_chain, spiral_ramp
 Machine(name="machine", duration=10.0, floor=True, floor_size=20.0)
   .add(item) -> item      # entity or group; returns it so you can keep a handle
   .set_camera(Camera)     # optional; default auto-frames the whole machine
@@ -39,6 +39,8 @@ Lever(pivot, length=2.0, width=0.3, thickness=0.05, facing_deg=0, tilt_deg=0, fu
   # hinged seesaw; anchors .left_end .right_end (top surface), parts .plank .fulcrum .hinge
 Camera.static(position, look_at, lens_mm=35)
 Camera.follow(target_entity, offset=(-3,-3,2), lens_mm=35)   # constant world offset
+Vec3(x, y, z)           # immutable vector; anchors return it: v + w, v - w, v * k, v / k, -v,
+  # x, y, z = v; .dot(w) .cross(w) .length() .normalized(); tuples are accepted wherever a point is
 ```
 Block/Domino `tilt_deg` in [0, 90): a tilted domino falls by itself, the way to start a chain.
 Passive bodies (Ramp, Floor, spiral, fulcrum) never move. Bodies must not interpenetrate (`OVERLAP`).

@@ -42,3 +42,40 @@ def test_api_doc_defaults_match_table():
     for key, d in DEFAULTS.items():
         assert key in rows, key
         assert f"| {d.friction:g} | {d.bounciness:g} | {d.margin:g} |" in rows[key]
+
+
+def test_api_doc_documents_every_public_name():
+    """FR-027 (T-019 review finding 8): every name in ``rube.__all__`` appears in the doc."""
+    import rube
+
+    text = DOC.read_text(encoding="utf-8")
+    missing = [n for n in rube.__all__ if not n.startswith("__") and n not in text]
+    # Deliberately undocumented: the group classes (documented through their factories), the
+    # color table (names listed in prose), an internal constant, the exception type, version.
+    assert set(missing) <= {
+        "CLEARANCE",
+        "COLORS",
+        "DominoChain",
+        "RubeValidationError",
+        "SpiralRamp",
+    }
+    assert "Vec3" in text
+
+
+def test_readme_has_setup_and_usage():
+    """FR-027 (T-019 review finding 8): README exists with setup and usage commands."""
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    for heading in ("## Setup", "## Usage"):
+        assert heading in text
+    assert "pip install" in text
+    assert "rube check" in text and "rube run" in text
+
+
+def test_public_modules_state_what_they_implement():
+    """NFR-007: the package docstring and the Blender package docstring have ``Implements:``."""
+    import rube
+    import rube.blender
+
+    assert "Implements:" in rube.__doc__
+    assert "Implements:" in (rube.blender.__doc__ or "")
+    assert "bmesh" not in (rube.blender.__doc__ or "").replace("``bmesh`` is not used", "")

@@ -6,6 +6,9 @@ Layer 1 (public API). This module re-exports the public API only; it never impor
 Author scripts use::
 
     from rube import Ball, Domino, Machine, Camera, Lever, Ramp, domino_chain, spiral_ramp
+
+Implements: FR-001 - FR-014 (re-exports the public API of the container, entities, generators,
+camera and Vec3), NFR-001 (Layer 1 never imports ``bpy``).
 """
 
 __version__ = "0.1.0"

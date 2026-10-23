@@ -190,6 +190,8 @@ class HingeSpec:
 
 
 # --- validation helpers -------------------------------------------------------------------
+# Shared by every Layer 1 spec module (entities, camera, generators): each appends issues to
+# a list instead of raising, so validate() can report every problem at once (FR-013).
 
 
 def _fmt(value: Any) -> str:
@@ -199,7 +201,7 @@ def _fmt(value: Any) -> str:
     return repr(value)
 
 
-def _check_vec(issues: list[Issue], who: str, field: str, value: Any) -> None:
+def check_vec(issues: list[Issue], who: str, field: str, value: Any) -> None:
     """Report ``INVALID_ARGUMENT`` unless ``value`` was coerced to a ``Vec3``."""
     if not isinstance(value, Vec3):
         issues.append(
@@ -212,7 +214,7 @@ def _check_vec(issues: list[Issue], who: str, field: str, value: Any) -> None:
         )
 
 
-def _check_number(
+def check_number(
     issues: list[Issue],
     who: str,
     field: str,
@@ -258,10 +260,10 @@ def _check_number(
     return True
 
 
-def _check_dimension(issues: list[Issue], who: str, field: str, value: Any, example: float) -> None:
+def check_dimension(issues: list[Issue], who: str, field: str, value: Any, example: float) -> None:
     """A length in meters: must be > 0 (``OUT_OF_RANGE``) and >= MIN_DIMENSION (``TOO_SMALL``)."""
     hint = f"use a positive {field} such as {example:g} m"
-    if not _check_number(issues, who, field, value, lo=0.0, lo_open=True, unit=" m", hint=hint):
+    if not check_number(issues, who, field, value, lo=0.0, lo_open=True, unit=" m", hint=hint):
         return
     if value < MIN_DIMENSION:
         issues.append(
@@ -275,7 +277,7 @@ def _check_dimension(issues: list[Issue], who: str, field: str, value: Any, exam
         )
 
 
-def _check_size3(
+def check_size3(
     issues: list[Issue],
     who: str,
     field: str,
@@ -283,7 +285,7 @@ def _check_size3(
     axes: tuple[str, str, str],
     example: tuple,
 ) -> None:
-    """A 3-tuple of lengths in meters (each checked like ``_check_dimension``)."""
+    """A 3-tuple of lengths in meters (each checked like ``check_dimension``)."""
     if not (isinstance(value, tuple) and len(value) == 3 and all(is_number(v) for v in value)):
         issues.append(
             error(
@@ -295,10 +297,10 @@ def _check_size3(
         )
         return
     for axis, v in zip(axes, value, strict=True):
-        _check_dimension(issues, who, f"{field} {axis}", v, example[axes.index(axis)])
+        check_dimension(issues, who, f"{field} {axis}", v, example[axes.index(axis)])
 
 
-def _coerce_vec(value: Any) -> Any:
+def coerce_vec(value: Any) -> Any:
     """``Vec3`` if coercible, else the raw value (``validate()`` reports it, design D-15)."""
     try:
         return as_vec3(value)
@@ -306,7 +308,7 @@ def _coerce_vec(value: Any) -> Any:
         return value
 
 
-def _coerce_size(value: Any) -> Any:
+def coerce_size(value: Any) -> Any:
     """Float 3-tuple if coercible (lists from JSON become tuples), else the raw value."""
     try:
         return tuple(as_vec3(value))
@@ -314,12 +316,12 @@ def _coerce_size(value: Any) -> Any:
         return value
 
 
-def _jsonable(value: Any) -> Any:
+def jsonable(value: Any) -> Any:
     """Convert stored argument values to JSON-safe data (Vec3/tuple -> list)."""
     if isinstance(value, Vec3):
         return value.to_list()
     if isinstance(value, (tuple, list)):
-        return [_jsonable(v) for v in value]
+        return [jsonable(v) for v in value]
     return value
 
 
@@ -430,14 +432,14 @@ class Entity(PhysicsProps):
                 )
             )
         if self.mass is not None:
-            _check_number(
+            check_number(
                 issues, who, "mass", self.mass, lo=0.0, lo_open=True, unit=" kg",
                 hint="use a positive mass in kg, e.g. mass=0.5",
             )  # fmt: skip
         for field in ("friction", "bounciness"):
             value = getattr(self, field)
             if value is not None:
-                _check_number(
+                check_number(
                     issues, who, field, value, lo=0.0, hi=1.0,
                     hint=f"use {field} between 0 and 1",
                 )  # fmt: skip
@@ -535,7 +537,7 @@ class Entity(PhysicsProps):
         d: dict[str, Any] = {"type": self.type_name(), "name": self.name}
         for f in fields(self):
             if f.name != "name":
-                d[f.name] = _jsonable(getattr(self, f.name))
+                d[f.name] = jsonable(getattr(self, f.name))
         return d
 
 
@@ -565,7 +567,7 @@ class Floor(Entity):
 
     def _geometry_issues(self) -> list[Issue]:
         issues: list[Issue] = []
-        _check_dimension(issues, self.label, "size", self.size, 20.0)
+        check_dimension(issues, self.label, "size", self.size, 20.0)
         return issues
 
     @property
@@ -599,14 +601,14 @@ class Ball(Entity):
     COLLISION_SHAPE: ClassVar[str] = "SPHERE"
 
     def __post_init__(self) -> None:
-        self.center = _coerce_vec(self.center)
+        self.center = coerce_vec(self.center)
 
     def _geometry_issues(self) -> list[Issue]:
         issues: list[Issue] = []
-        _check_vec(issues, self.label, "center", self.center)
+        check_vec(issues, self.label, "center", self.center)
         hint = "use a positive radius such as 0.1 m"
         r = self.radius
-        if _check_number(
+        if check_number(
             issues, self.label, "radius", r, lo=0.0, lo_open=True, unit=" m", hint=hint
         ):
             # The ball's physical dimension is its diameter.
@@ -645,17 +647,17 @@ class _BottomPlacedBox(Entity):
     """
 
     def __post_init__(self) -> None:
-        self.position = _coerce_vec(self.position)
-        self.size = _coerce_size(self.size)
+        self.position = coerce_vec(self.position)
+        self.size = coerce_size(self.size)
 
     def _tilt_deg(self) -> float:
         return 0.0
 
     def _box_geometry_issues(self, axes: tuple[str, str, str], example: tuple) -> list[Issue]:
         issues: list[Issue] = []
-        _check_vec(issues, self.label, "position", self.position)
-        _check_size3(issues, self.label, "size", self.size, axes, example)
-        _check_number(
+        check_vec(issues, self.label, "position", self.position)
+        check_size3(issues, self.label, "size", self.size, axes, example)
+        check_number(
             issues, self.label, "facing_deg", self.facing_deg,
             hint="use an angle in degrees, e.g. facing_deg=90 to face +Y",
         )  # fmt: skip
@@ -745,7 +747,7 @@ class Domino(_BottomPlacedBox):
 
     def _geometry_issues(self) -> list[Issue]:
         issues = self._box_geometry_issues(("thickness", "width", "height"), (0.1, 0.4, 0.8))
-        _check_number(
+        check_number(
             issues, self.label, "tilt_deg", self.tilt_deg, lo=0.0, hi=90.0, hi_open=True,
             unit=" deg", hint="use tilt_deg between 0 and 90 (10 is enough to start a chain); "
             "to lean the other way, add 180 to facing_deg",
@@ -785,8 +787,8 @@ class Hinge:
     name: str | None = None
 
     def __post_init__(self) -> None:
-        self.pivot = _coerce_vec(self.pivot)
-        self.axis = _coerce_vec(self.axis)
+        self.pivot = coerce_vec(self.pivot)
+        self.axis = coerce_vec(self.axis)
 
     @classmethod
     def type_name(cls) -> str:
@@ -821,8 +823,8 @@ class Hinge:
                     "connect two different entities",
                 )
             )
-        _check_vec(issues, who, "pivot", self.pivot)
-        _check_vec(issues, who, "axis", self.axis)
+        check_vec(issues, who, "pivot", self.pivot)
+        check_vec(issues, who, "axis", self.axis)
         if isinstance(self.axis, Vec3) and self.axis.length() == 0:
             issues.append(
                 error(
@@ -855,8 +857,8 @@ class Hinge:
             "name": self.name,
             "body_a": self.body_a.label,
             "body_b": self.body_b.label,
-            "pivot": _jsonable(self.pivot),
-            "axis": _jsonable(self.axis),
+            "pivot": jsonable(self.pivot),
+            "axis": jsonable(self.axis),
             "disable_collisions": self.disable_collisions,
         }
 

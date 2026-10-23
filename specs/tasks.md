@@ -33,7 +33,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 - [x] T-006: `machine.py`: registry, groups, auto names, auto floor, `validate()` (NAME_DUPLICATE, OUT_OF_RANGE duration, TOO_MANY_BODIES, OUTSIDE_FLOOR, MASS_RATIO), `bodies()`/`constraints()`.
   - Requirements: FR-001, FR-002, FR-013
   - Done when: `test_machine.py` covers every listed code and build order.
-- [ ] T-007: `camera.py` (static, follow, auto_frame) + `to_dict`/`from_dict`.
+- [x] T-007: `camera.py` (static, follow, auto_frame) + `to_dict`/`from_dict`.
   - Requirements: FR-014, FR-015
   - Done when: `test_camera.py` (auto frame contains bbox), `test_serialization.py` (round-trip equality, JSON-safe) pass.
 - [ ] T-008: `script.py` (AST guard, exec, NO_MACHINE, SCRIPT_ERROR) + `cli.py check` + `report.py` + `test_layering.py` (NFR-001 scan; NFR-003 ops whitelist + no `active_object`).

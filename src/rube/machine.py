@@ -18,11 +18,14 @@ import math
 from collections import Counter
 from itertools import combinations
 
-from rube.entities import BodySpec, Entity, Floor, Group, Hinge, HingeSpec
+from rube.camera import Camera, auto_frame
+from rube.entities import BodySpec, Entity, Floor, Group, Hinge, HingeSpec, entity_from_dict
 from rube.errors import Issue, RubeValidationError, error, has_errors, warning
 from rube.geometry import aabb_gap
 from rube.vec import is_number
 
+#: Version of the ``spec.json`` layout produced by ``Machine.to_dict`` (design section 4.3).
+SPEC_FORMAT = 1
 #: Frames per second (fixed in v1).
 FPS = 24
 #: Rigid body limit (bake time grows quickly beyond this).
@@ -56,6 +59,7 @@ class Machine:
         entities: Registered entities in build order (the auto floor first).
         hinges: Registered ``Hinge`` constraints in order.
         groups: Registered groups (their members are already in ``entities`` / ``hinges``).
+        camera: The camera set with ``set_camera``, or ``None`` for the auto-framed default.
     """
 
     def __init__(
@@ -72,6 +76,7 @@ class Machine:
         self.entities: list[Entity] = []
         self.hinges: list[Hinge] = []
         self.groups: list[Group] = []
+        self.camera: Camera | None = None
         self._counters: Counter[str] = Counter()
         self._taken: set[str] = set()
         if floor:
@@ -124,6 +129,19 @@ class Machine:
         if isinstance(item.name, str):
             self._taken.add(item.name)
 
+    def set_camera(self, camera: Camera) -> None:
+        """Use ``camera`` instead of the auto-framed default (one camera per machine).
+
+        Raises:
+            TypeError: if ``camera`` is not a ``Camera``.
+        """
+        if not isinstance(camera, Camera):
+            raise TypeError(
+                "set_camera() takes Camera.static(...) or Camera.follow(...), "
+                f"got {type(camera).__name__}: {camera!r}"
+            )
+        self.camera = camera
+
     def get(self, name: str) -> Entity:
         """The registered entity called ``name``.
 
@@ -167,6 +185,7 @@ class Machine:
             issues += self._hinge_registration_issues(h)
         for g in self.groups:
             issues += g.validate()
+        issues += self._camera_issues()
         issues += self._name_issues()
         if len(self.entities) > MAX_BODIES:
             issues.append(
@@ -236,6 +255,26 @@ class Machine:
                         f"add {body.label!r} to the machine (or to the same group) too",
                     )
                 )
+        return issues
+
+    def _camera_issues(self) -> list[Issue]:
+        if self.camera is None:
+            return []
+        issues = self.camera.validate()
+        target = self.camera.target
+        if (
+            self.camera.mode == "follow"
+            and isinstance(target, Entity)
+            and not any(target is e for e in self.entities)
+        ):
+            issues.append(
+                error(
+                    "INVALID_ARGUMENT",
+                    "camera",
+                    f"follow target {target.label!r} is not part of the machine",
+                    f"add {target.label!r} to the machine before following it",
+                )
+            )
         return issues
 
     def _name_issues(self) -> list[Issue]:
@@ -325,3 +364,49 @@ class Machine:
         """
         self._require_valid()
         return [h.spec() for h in self.hinges]
+
+    # -- serialization (spec.json) --------------------------------------------------------
+
+    def to_dict(self) -> dict:
+        """JSON-safe spec handed to Blender (design section 4.3).
+
+        Entities are flat in build order (auto floor first); groups are flattened (design
+        D-5); a missing camera is resolved to the concrete auto-framed static camera (D-12).
+
+        Raises:
+            RubeValidationError: if the machine has errors.
+        """
+        bodies = self.bodies()
+        camera = self.camera
+        if camera is None:
+            camera = auto_frame([b.aabb() for b in bodies if b.type != "Floor"])
+        return {
+            "format": SPEC_FORMAT,
+            "name": self.name,
+            "duration": self.duration,
+            "floor": self.floor,
+            "floor_size": self.floor_size,
+            "entities": [e.to_dict() for e in self.entities],
+            "constraints": [h.to_dict() for h in self.hinges],
+            "camera": camera.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Machine:
+        """Rebuild a machine from ``to_dict()`` output; ``from_dict(d).to_dict() == d``.
+
+        Raises:
+            ValueError: unsupported ``format`` or unknown entity type.
+        """
+        if d.get("format") != SPEC_FORMAT:
+            raise ValueError(f"unsupported spec format {d.get('format')!r}, expected {SPEC_FORMAT}")
+        # The floor is already one of the listed entities: never add a second one.
+        m = cls(name=d["name"], duration=d["duration"], floor=False, floor_size=d["floor_size"])
+        m.floor = d["floor"]
+        for record in d["entities"]:
+            m._register(entity_from_dict(record))
+        by_name = {e.name: e for e in m.entities}
+        for record in d["constraints"]:
+            m._register(Hinge.from_dict(record, by_name))
+        m.camera = Camera.from_dict(d["camera"], by_name)
+        return m

@@ -22,8 +22,9 @@ Later milestones add the internal ``SpiralTrack`` / ``SupportColumn`` /
 ``LeverPlank`` / ``Fulcrum`` and the ``Lever`` group here; concrete ``Entity`` subclasses
 register themselves in ``ENTITY_TYPES`` automatically, so ``entity_from_dict`` needs no edits.
 
-Implements: FR-004, FR-005, FR-006, FR-007, FR-008 (Ramp plank), FR-013 (entity-level
-checks), FR-020 (BodySpec / HingeSpec), FR-012 structure (Hinge, Group).
+Implements: FR-004, FR-005, FR-006, FR-007, FR-008 (Ramp plank), FR-009 (Ramp rails),
+FR-013 (entity-level checks), FR-020
+(BodySpec / HingeSpec), FR-012 structure (Hinge, Group).
 """
 
 from __future__ import annotations
@@ -33,7 +34,16 @@ from dataclasses import KW_ONLY, dataclass, fields
 from typing import Any, ClassVar
 
 from rube.errors import Issue, RubeValidationError, error, has_errors
-from rube.geometry import AABB, MeshSpec, aabb, box_mesh, transform_points, uv_sphere_mesh
+from rube.geometry import (
+    AABB,
+    MeshSpec,
+    aabb,
+    box_mesh,
+    channel_mesh,
+    recenter,
+    transform_points,
+    uv_sphere_mesh,
+)
 from rube.vec import (
     IDENTITY,
     Mat3,
@@ -55,6 +65,9 @@ MIN_DIMENSION = 0.02
 FLOOR_THICKNESS = 0.2
 #: Blender truncates object names longer than this many bytes; names must survive exactly.
 MAX_NAME_BYTES = 63
+#: Wall height (m) above the floor of a ``Ramp(rails=True)`` channel (same as the
+#: ``spiral_ramp`` default ``wall_height``; SPEC gives no value, design D-24).
+RAIL_HEIGHT = 0.08
 
 #: Named preview colors (linear RGBA for Workbench object color).
 COLORS: dict[str, tuple[float, float, float, float]] = {
@@ -102,13 +115,16 @@ class PhysicsDefaults:
 
 
 #: The single physics defaults table (SPEC section 5). Passive rows carry a placeholder mass
-#: of 1.0 kg because Blender ignores mass for passive bodies.
+#: of 1.0 kg because Blender ignores mass for passive bodies. Keys are type names, except
+#: ``RampRails`` (a ``Ramp`` with ``rails=True``: same values, MESH margin 0.005). Triangle
+#: MESH shapes get the larger margin SPEC section 5 gives for the channel mesh.
 DEFAULTS: dict[str, PhysicsDefaults] = {
     "Floor": PhysicsDefaults(False, 1.0, None, 0.6, 0.0, 0.04, 0.1, 0.001, "gray"),
     "Ball": PhysicsDefaults(True, 0.5, None, 0.4, 0.1, 0.04, 0.02, 0.001, "red"),
     "Block": PhysicsDefaults(True, None, 600.0, 0.5, 0.0, 0.04, 0.1, 0.001, "blue"),
     "Domino": PhysicsDefaults(True, None, 600.0, 0.5, 0.0, 0.04, 0.1, 0.001, "yellow"),
     "Ramp": PhysicsDefaults(False, 1.0, None, 0.3, 0.0, 0.04, 0.1, 0.001, "wood"),
+    "RampRails": PhysicsDefaults(False, 1.0, None, 0.3, 0.0, 0.04, 0.1, 0.005, "wood"),
 }
 
 
@@ -467,7 +483,7 @@ class Entity(PhysicsProps):
 
     def resolved_physics(self) -> ResolvedPhysics:
         """Author overrides merged onto ``DEFAULTS[type]``; mass derived from density if unset."""
-        row = DEFAULTS[self.type_name()]
+        row = DEFAULTS[self._defaults_key()]
         mass = self.mass
         if mass is None:
             mass = row.mass if row.mass is not None else row.density * self._volume()
@@ -500,7 +516,7 @@ class Entity(PhysicsProps):
             location=center + Vec3(0.0, 0.0, self._lift()),
             rotation=rotation,
             mesh=self._mesh(),
-            collision_shape=self.COLLISION_SHAPE,
+            collision_shape=self._collision_shape(),
             dynamic=phys.dynamic,
             mass=phys.mass,
             friction=float(phys.friction),
@@ -512,6 +528,14 @@ class Entity(PhysicsProps):
             start_deactivated=start_deactivated,
             color=COLORS[phys.color],
         )
+
+    def _defaults_key(self) -> str:
+        """Row of ``DEFAULTS`` to use; the type name unless a variant has its own row."""
+        return self.type_name()
+
+    def _collision_shape(self) -> str:
+        """Bullet collision shape; ``COLLISION_SHAPE`` unless the shape depends on arguments."""
+        return self.COLLISION_SHAPE
 
     def _pose(self) -> tuple[Vec3, Mat3]:
         """Resting pose: world center of volume and rotation matrix. Subclasses implement."""
@@ -772,6 +796,10 @@ class Ramp(Entity):
 
     ``start`` and ``end`` are the endpoints of the **top surface centerline**; ``start`` is the
     high end. The plank hangs below that line by ``thickness`` and is level across its width.
+    With ``rails=True`` it is a U-channel instead (``geometry.channel_mesh`` along the straight
+    start -> end path, collision ``MESH``, margin 0.005, FR-009): the floor's top centerline
+    is still start -> end, the groove is ``width`` wide, and walls ``thickness`` thick rise
+    ``RAIL_HEIGHT`` (0.08 m) above the floor outside the groove, so balls cannot fall off.
 
     Args:
         start: High end of the top-surface centerline (x, y, z), meters.
@@ -780,7 +808,7 @@ class Ramp(Entity):
             into the floor; passive bodies never collide with each other).
         width: Plank width across the slope, meters.
         thickness: Plank thickness, meters.
-        rails: Side rails (U-channel). Not available yet: only ``False`` is accepted.
+        rails: ``True`` = U-channel with side walls (keeps a ball on the ramp).
 
     Anchors:
         top: ``start``. bottom: ``end``.
@@ -816,17 +844,7 @@ class Ramp(Entity):
                     "INVALID_ARGUMENT",
                     who,
                     f"rails must be True or False, got {self.rails!r}",
-                    "use rails=False",
-                )
-            )
-        elif self.rails:
-            # The U-channel ramp is milestone M5 (T-015); refuse instead of silently ignoring.
-            issues.append(
-                error(
-                    "INVALID_ARGUMENT",
-                    who,
-                    "rails=True is not supported by this version",
-                    "use rails=False",
+                    "use rails=True for side walls or rails=False for a plain plank",
                 )
             )
         if isinstance(self.start, Vec3) and isinstance(self.end, Vec3):
@@ -862,7 +880,23 @@ class Ramp(Entity):
         side = Vec3(0.0, 0.0, 1.0).cross(_horizontal(direction)).normalized()
         return direction, side, direction.cross(side)
 
+    def _defaults_key(self) -> str:
+        return "RampRails" if self.rails is True else "Ramp"
+
+    def _collision_shape(self) -> str:
+        # The U-channel is concave, so only a triangle MESH shape keeps the groove open.
+        return "MESH" if self.rails is True else "BOX"
+
+    def _channel(self) -> tuple[MeshSpec, Vec3]:
+        """Rails variant: centered channel mesh and its world center of volume."""
+        return recenter(
+            channel_mesh([self.start, self.end], self.width, RAIL_HEIGHT, self.thickness)
+        )
+
     def _pose(self) -> tuple[Vec3, Mat3]:
+        if self.rails is True:
+            # The channel mesh is generated in world axes, so only a translation is needed.
+            return self._channel()[1], IDENTITY
         direction, side, normal = self._frame()
         # Columns of the rotation matrix are the local axes expressed in world space.
         rotation = tuple(zip(direction, side, normal, strict=True))
@@ -871,6 +905,8 @@ class Ramp(Entity):
         return center, rotation  # type: ignore[return-value]
 
     def _mesh(self) -> MeshSpec:
+        if self.rails is True:
+            return self._channel()[0]
         return box_mesh((self.end - self.start).length(), self.width, self.thickness)
 
     def _volume(self) -> float:

@@ -11,10 +11,14 @@ shape and the BVH overlap check rely on.
 
 Paths: ``catmull_rom`` turns waypoints into a dense polyline through them and
 ``ArcLengthTable`` maps arc length to points/tangents on it, so generators can place parts at
-equal arc length (design section 6). A later milestone adds ``channel_mesh`` here.
+equal arc length (design section 6).
 
-Implements: FR-005, FR-006, FR-011 (spline + arc-length resampling), FR-020 (mesh data for
-builders), FR-013 (AABB helpers for MASS_RATIO / auto camera).
+Channels: ``channel_mesh`` sweeps a solid U cross-section along a path; ``Ramp(rails=True)``
+(straight path) and ``spiral_ramp`` (helix) both use it (SPEC 6.2, design D-24).
+
+Implements: FR-005, FR-006, FR-009 / FR-010 (channel mesh), FR-011 (spline + arc-length
+resampling), FR-020 (mesh data for builders), FR-013 (AABB helpers for MASS_RATIO / auto
+camera).
 """
 
 from __future__ import annotations
@@ -278,3 +282,106 @@ class ArcLengthTable:
         while i > 0 and self.cumulative[i + 1] == self.cumulative[i]:
             i -= 1
         return (self.points[i + 1] - self.points[i]).normalized()
+
+
+# --- channels -------------------------------------------------------------------------------
+
+#: U cross-section of ``channel_mesh`` as ``(across, up)`` multipliers, counter-clockwise about
+#: the direction of travel. Each entry is ``(side_w, side_t, up_h, up_t)``: the corner sits at
+#: ``side_w * width/2 + side_t * thickness`` across and ``up_h * wall_height + up_t * thickness``
+#: up. Index 4/5 are the inner floor corners (the floor's top surface), 3/6 the inner wall tops.
+_PROFILE = (
+    (-1, -1, 0, -1),  # 0 outer bottom, left
+    (1, 1, 0, -1),  # 1 outer bottom, right
+    (1, 1, 1, 0),  # 2 right wall top, outer
+    (1, 0, 1, 0),  # 3 right wall top, inner
+    (1, 0, 0, 0),  # 4 floor top, right
+    (-1, 0, 0, 0),  # 5 floor top, left
+    (-1, 0, 1, 0),  # 6 left wall top, inner
+    (-1, -1, 1, 0),  # 7 left wall top, outer
+)
+#: End caps: the (non-convex) U split into three convex quads that share edges 1-4 and 5-0,
+#: so the cap stays manifold. Same counter-clockwise order as ``_PROFILE``.
+_CAP_QUADS = ((0, 1, 4, 5), (1, 2, 3, 4), (5, 6, 7, 0))
+
+
+def path_frames(path: Sequence[Vec3]) -> list[tuple[Vec3, Vec3, Vec3]]:
+    """Moving frame ``(tangent, side, up)`` at every point of a polyline.
+
+    ``tangent`` is the unit direction of travel (central difference; one-sided at the ends),
+    ``side`` the **horizontal** unit vector to the left of travel (``z x tangent``), and
+    ``up = tangent x side`` the surface normal, tilted back by the slope. Keeping ``side``
+    horizontal makes a channel floor level across its width, like a ``Ramp`` plank.
+
+    Args:
+        path: Two or more distinct points (meters); no segment may be vertical.
+
+    Returns:
+        One right-handed orthonormal frame per point.
+    """
+    frames = []
+    last = len(path) - 1
+    for i in range(len(path)):
+        tangent = (path[min(i + 1, last)] - path[max(i - 1, 0)]).normalized()
+        side = Vec3(-tangent.y, tangent.x, 0.0).normalized()  # z x tangent, horizontal
+        frames.append((tangent, side, tangent.cross(side)))
+    return frames
+
+
+def channel_mesh(
+    path: Sequence[Vec3], width: float, wall_height: float, thickness: float
+) -> MeshSpec:
+    """Solid U-channel (floor + two side walls) swept along a polyline.
+
+    Shared by ``Ramp(rails=True)`` (straight path) and ``spiral_ramp`` (helix), SPEC 6.2.
+    The mesh is a **closed solid** -- every edge is shared by exactly two faces, faces wound
+    outward -- because Bullet's ``MESH`` shape and the BVH overlap check need one (FR-009).
+
+    Cross-section at each path point, in its ``path_frames`` frame: the path point is the
+    center of the floor's **top surface**; the groove between the walls is ``width`` wide;
+    the walls are ``thickness`` thick (outside the groove) and rise ``wall_height`` above
+    the floor top; the floor is ``thickness`` thick below the path. Sections at sharp bends
+    are not mitred: keep consecutive segments' turn small (generators sample densely).
+
+    Args:
+        path: Two or more points (meters), floor top-surface centerline in travel order.
+        width: Inner width of the groove, meters.
+        wall_height: Wall height above the floor top, meters.
+        thickness: Floor and wall thickness, meters.
+
+    Returns:
+        A mesh in the path's own coordinates (not centered; see ``recenter``):
+        ``8 * len(path)`` vertices, section ``k`` at indices ``8k .. 8k + 7`` in
+        ``_PROFILE`` order; ``8 * (len(path) - 1)`` side quads plus 3 quads per end cap.
+    """
+    half = width / 2
+    verts: list[Point] = []
+    for p, (_, side, up) in zip(path, path_frames(path), strict=True):
+        for sw, st, uh, ut in _PROFILE:
+            across = sw * half + st * thickness
+            height = uh * wall_height + ut * thickness
+            verts.append(tuple(p + side * across + up * height))
+    n = len(_PROFILE)
+    faces: list[tuple[int, ...]] = []
+    for i in range(len(path) - 1):
+        for k in range(n):
+            a, b = i * n + k, i * n + (k + 1) % n
+            # The profile is counter-clockwise about the travel direction, so (a, b, b', a')
+            # has its normal pointing out of the solid.
+            faces.append((a, b, b + n, a + n))
+    end = (len(path) - 1) * n
+    faces += [tuple(reversed(q)) for q in _CAP_QUADS]  # start cap faces backwards
+    faces += [tuple(end + k for k in q) for q in _CAP_QUADS]  # end cap faces forwards
+    return MeshSpec(tuple(verts), tuple(faces))
+
+
+def recenter(mesh: MeshSpec) -> tuple[MeshSpec, Vec3]:
+    """Shift a closed mesh so its center of volume is the origin (design D-3).
+
+    Returns:
+        ``(centered_mesh, offset)``: ``offset`` is the old center of volume, i.e. where the
+        object origin must go so the centered mesh lands where the input mesh was.
+    """
+    _, centroid = mesh_volume_centroid(mesh)
+    moved = tuple(tuple(Vec3(*v) - centroid) for v in mesh.vertices)
+    return MeshSpec(moved, mesh.faces), centroid

@@ -30,10 +30,52 @@ Append one line per completed task: `YYYY-MM-DD T-NNN <summary> — <tests> — 
 - 2026-10-24 T-019 review finding 6: layering scanners resolve import aliases, flag getattr on bpy/context, reset temp_override state in nested def/lambda, forbid Layer-1 importlib and rube.blender imports (self-test per pattern); real violation fixed: script.py import guard now wraps the builtin __import__ instead of importlib.
 - 2026-10-24 T-019 review finding 8: Vec3 documented in API_FOR_LLM.md (154 lines), README test, Implements line in rube/__init__.py, rube/blender docstring no longer claims bmesh, NFR-002 test (empty runtime dependencies, Layer 1 imports stdlib only via sys.stdlib_module_names).
 
+- 2026-10-24 T-002 Probe (tests/blender/probe_api.py, conftest.py, test_probe.py) confirmed complete — probe passes on Blender 5.2.3 (box was left unticked by the M0 agent).
+- 2026-10-24 T-019 Verification: review in specs/review.md; findings 1–9 fixed, 10 resolved by spec (FR-021 amended, D-18); full gate unit 375 / Blender 18 / ruff clean; overlap, import-bypass and endless-loop repros re-checked by hand.
+
 ## Physics default changes (assumption A-1)
 
 _None yet._ (M3: A2-A5 and A9 pass with the SPEC section 5 defaults unchanged. M5: A6 passes unchanged; new rows RampRails/SpiralTrack (Ramp values, MESH margin 0.005 per SPEC section 5) and SupportColumn (passive, friction 0.5, margin 0.001) are additions, not tuning.)
 
 ## Traceability matrix
 
-_Filled in at T-019._
+Final state 2026-10-24: unit 375 passed, Blender 18 passed, ruff clean. `U:` = `tests/unit/`,
+`B:` = `tests/blender/test_acceptance.py` (scene settings checked via `check_scene.py`, camera via `check_camera.py`).
+
+| Req | Verified by | Notes |
+|---|---|---|
+| FR-001 Machine | U:test_machine.py (auto floor, add/order, groups, duration, TOO_MANY_BODIES); B:A1 | |
+| FR-002 Naming | U:test_machine.py (auto names, NAME_DUPLICATE); B:check_scene (object name == entity name) | |
+| FR-003 Vec3/conventions | U:test_vec.py; U:test_machine.py::test_frame_range* | |
+| FR-004 Physics defaults | U:test_entities.py (defaults table, density mass, ranges, colors); U:test_docs.py::test_api_doc_defaults_match_table | |
+| FR-005 Ball | U:test_entities.py::test_ball_body_and_anchor; U:test_geometry.py; B:A1 | |
+| FR-006 Block | U:test_entities.py::test_block_anchors_and_body | |
+| FR-007 Domino | U:test_entities.py (tilt, deactivation); B:A3 + check_scene (rigid-body deactivation flags) | |
+| FR-008 Ramp | U:test_ramp.py; B:A2, A5 | |
+| FR-009 Ramp rails | U:test_channel.py; B:A6 | |
+| FR-010 Spiral | U:test_spiral.py; B:A6 | |
+| FR-011 Domino chain | U:test_generators.py, test_paths.py; B:A3, A4, A5 | |
+| FR-012 Lever | U:test_lever.py; B:A7 + check_scene (HINGE, disable_collisions) | |
+| FR-013 Validation | U:test_machine.py, test_entities.py, test_errors.py | |
+| FR-014 Camera | U:test_camera.py; B:A12 (check_camera, check_scene: no parent, COPY_LOCATION/TRACK_TO) | |
+| FR-015 Serialization | U:test_serialization.py; U:test_entities.py::test_entity_dict_roundtrip | |
+| FR-016 Script guard | U:test_script.py (allowed/disallowed, bypasses, curated builtins, 30 s limit, BaseException); B:A11 | Guard rail, not a sandbox (D-28/D-29 list residual gaps) |
+| FR-017 rube check | U:test_cli_check.py | |
+| FR-018 rube run | U:test_cli_run.py (exit codes, timeout/process group, missing report, interrupt, stale artifacts, --timeout validation) | |
+| FR-019 Scene setup | B:check_scene (units, fps, range, substeps, iterations, split impulse, cache range) via A1/A3/A7/A12 | |
+| FR-020 Build | B:check_scene (rigid-body fields, margins, custom props, scale 1) | |
+| FR-021 Overlap | B:A8, test_overlap_containment_and_near_misses, test_overlap_coplanar_boxes, test_overlap_skips_hinged_pairs_with_collisions_disabled | Passive–passive skipped (D-18) |
+| FR-022 Bake | U:test_cli_run.py::test_bake_failed_status_exits_3 (fake Blender); all B scenarios bake | Real Bullet `RuntimeError` path not exercised (no reliable trigger) |
+| FR-023 Analysis | U:test_analysis.py | |
+| FR-024 Rendering | U:test_report.py (still frames); B:A10, A12 + check_scene (H.264) | |
+| FR-025 Report | U:test_report.py, test_cli_run.py::test_framework_bug_still_writes_report; B:A1 | |
+| FR-026 Probe | B:tests/blender/test_probe.py | |
+| FR-027 Docs | U:test_docs.py (examples pass check, < 300 lines, defaults, public names, README) | |
+| NFR-001 Layer isolation | U:test_layering.py | |
+| NFR-002 Dependencies | U:test_dependencies.py | |
+| NFR-003 bpy discipline | U:test_layering.py | |
+| NFR-004 Determinism | B:A9, test_a1_determinism | |
+| NFR-005 Performance | B:A10 (< 60 s) | |
+| NFR-006 Untrusted scripts | U:test_script.py::test_guard_documented_as_guard_rail_not_sandbox; B:A11 | |
+| NFR-007 Code docs | U:test_docs.py::test_public_modules_state_what_they_implement | Docstring coverage beyond module level reviewed manually, not enforced by test |
+| NFR-008 Quality gate | pytest + ruff run on every commit | |

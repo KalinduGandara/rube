@@ -15,7 +15,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 
 ## M0 — Probe [sonnet]
 
-- [ ] T-002: `tests/blender/probe_api.py` re-verifies every SPEC §1.1 fact; `tests/blender/conftest.py` (Blender discovery, `blender` marker skip); `tests/blender/test_probe.py` runs it.
+- [x] T-002: `tests/blender/probe_api.py` re-verifies every SPEC §1.1 fact; `tests/blender/conftest.py` (Blender discovery, `blender` marker skip); `tests/blender/test_probe.py` runs it.
   - Requirements: FR-026
   - Done when: `pytest -m blender tests/blender/test_probe.py` passes on Blender 5.2.3.
 
@@ -90,6 +90,6 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 
 ## Verify [opus]
 
-- [ ] T-019: Full suite + ruff; traceability matrix in `progress.md`; fresh-eyes review against `requirements.md`; fix findings.
+- [x] T-019: Full suite + ruff; traceability matrix in `progress.md`; fresh-eyes review against `requirements.md`; fix findings.
   - Requirements: all
   - Done when: every FR/NFR maps to ≥ 1 passing test or is flagged.

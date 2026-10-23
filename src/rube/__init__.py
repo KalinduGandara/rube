@@ -7,13 +7,13 @@ Author scripts use::
 
     from rube import Ball, Domino, Machine, Camera
 
-Later milestones add ``Ramp``, ``Lever``, ``domino_chain`` and ``spiral_ramp`` here.
+Later milestones add ``Lever``, ``domino_chain`` and ``spiral_ramp`` here.
 """
 
 __version__ = "0.1.0"
 
 from rube.camera import Camera  # noqa: E402 - __version__ first: rube.report imports it
-from rube.entities import CLEARANCE, COLORS, Ball, Block, Domino, Floor  # noqa: E402
+from rube.entities import CLEARANCE, COLORS, Ball, Block, Domino, Floor, Ramp  # noqa: E402
 from rube.errors import Issue, RubeValidationError  # noqa: E402
 from rube.machine import Machine  # noqa: E402
 from rube.vec import Vec3  # noqa: E402
@@ -28,6 +28,7 @@ __all__ = [
     "Floor",
     "Issue",
     "Machine",
+    "Ramp",
     "RubeValidationError",
     "Vec3",
     "__version__",

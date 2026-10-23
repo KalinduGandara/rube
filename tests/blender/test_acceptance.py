@@ -120,3 +120,19 @@ def test_overlap_containment_and_near_misses(tmp_path, blender_exe):
     code, report, output = rube_run(script, tmp_path / "out", blender_exe)
     assert code == 2, output
     assert [i["entity"] for i in report["issues"] if i["code"] == "OVERLAP"] == ["big,inside"]
+
+
+def test_a2_ball_rolls_down_ramp(tmp_path, blender_exe):
+    """A2 / FR-008: ball on a 20 deg ramp ends beyond ramp.bottom.x; no UNSTABLE warning."""
+    code, report, output = rube_run(EXAMPLES / "a2_ball_down_ramp.py", tmp_path, blender_exe)
+    assert code == 0, output
+    assert report["status"] == "ok", report
+    assert "UNSTABLE" not in {i["code"] for i in report["issues"]}
+    # ramp.bottom = the ramp's `end` as handed to Blender in spec.json.
+    spec = json.loads((tmp_path / "spec.json").read_text())
+    ramp = next(e for e in spec["entities"] if e["type"] == "Ramp")
+    ball = entity(report, "Ball_1")
+    assert ball["final_position"][0] > ramp["end"][0]
+    assert ball["left_bounds"] is False
+    # Passive ramp is not in the entity records.
+    assert [e["name"] for e in report["entities"]] == ["Ball_1"]

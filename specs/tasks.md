@@ -51,7 +51,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 
 ## M3 — Ramp + chains [opus]
 
-- [ ] T-011: `Ramp` plank + anchors (`ball_spawn`, `exit`, `slope_deg`, `direction`); example + test A2.
+- [x] T-011: `Ramp` plank + anchors (`ball_spawn`, `exit`, `slope_deg`, `direction`); example + test A2.
   - Requirements: FR-008
   - Done when: unit anchor tests pass; A2 passes.
 - [ ] T-012: `geometry.catmull_rom`, `ArcLengthTable`; `generators.domino_chain` + validation; examples + tests A3, A4.

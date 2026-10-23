@@ -14,19 +14,21 @@ Physics defaults live in the single ``DEFAULTS`` table (SPEC section 5, assumpti
 values only there, only to pass acceptance tests, and log changes in ``specs/progress.md``.
 
 Placement conventions (SPEC section 2): ``Ball.center`` is the sphere center; ``Block`` and
-``Domino`` ``position`` is the **bottom-center** point on the supporting surface. Angles are
+``Domino`` ``position`` is the **bottom-center** point on the supporting surface; ``Ramp``
+``start``/``end`` are the top-surface centerline endpoints (``start`` high). Angles are
 degrees; ``facing_deg`` is yaw about +Z with 0 = +X.
 
-Later milestones add ``Ramp``, the internal ``SpiralTrack`` / ``SupportColumn`` /
+Later milestones add the internal ``SpiralTrack`` / ``SupportColumn`` /
 ``LeverPlank`` / ``Fulcrum`` and the ``Lever`` group here; concrete ``Entity`` subclasses
 register themselves in ``ENTITY_TYPES`` automatically, so ``entity_from_dict`` needs no edits.
 
-Implements: FR-004, FR-005, FR-006, FR-007, FR-013 (entity-level checks), FR-020 (BodySpec /
-HingeSpec), FR-012 structure (Hinge, Group).
+Implements: FR-004, FR-005, FR-006, FR-007, FR-008 (Ramp plank), FR-013 (entity-level
+checks), FR-020 (BodySpec / HingeSpec), FR-012 structure (Hinge, Group).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import KW_ONLY, dataclass, fields
 from typing import Any, ClassVar
 
@@ -106,6 +108,7 @@ DEFAULTS: dict[str, PhysicsDefaults] = {
     "Ball": PhysicsDefaults(True, 0.5, None, 0.4, 0.1, 0.04, 0.02, 0.001, "red"),
     "Block": PhysicsDefaults(True, None, 600.0, 0.5, 0.0, 0.04, 0.1, 0.001, "blue"),
     "Domino": PhysicsDefaults(True, None, 600.0, 0.5, 0.0, 0.04, 0.1, 0.001, "yellow"),
+    "Ramp": PhysicsDefaults(False, 1.0, None, 0.3, 0.0, 0.04, 0.1, 0.001, "wood"),
 }
 
 
@@ -761,6 +764,183 @@ class Domino(_BottomPlacedBox):
         # Start deactivated so long chains do not jitter before being hit (SPEC 5.1) --
         # except a tilted domino: a start-deactivated body ignores gravity until struck.
         return (True, self.tilt_deg == 0)
+
+
+@dataclass(eq=False)
+class Ramp(Entity):
+    """Straight inclined plank (passive, collision ``BOX``) for balls to roll down.
+
+    ``start`` and ``end`` are the endpoints of the **top surface centerline**; ``start`` is the
+    high end. The plank hangs below that line by ``thickness`` and is level across its width.
+
+    Args:
+        start: High end of the top-surface centerline (x, y, z), meters.
+        end: Low end of the top-surface centerline (x, y, z), meters. Tip: ``end.z = 0`` lets
+            the top surface meet the floor so a ball rolls off smoothly (the plank may dip
+            into the floor; passive bodies never collide with each other).
+        width: Plank width across the slope, meters.
+        thickness: Plank thickness, meters.
+        rails: Side rails (U-channel). Not available yet: only ``False`` is accepted.
+
+    Anchors:
+        top: ``start``. bottom: ``end``.
+        direction: Unit vector pointing downhill along the surface (3D).
+        slope_deg: Inclination in degrees (0 = level).
+        ball_spawn(radius): Where to put a ball's center so it starts rolling from the top.
+        exit(distance): Ground point (z = 0) ``distance`` m beyond the bottom end.
+
+    Local frame of the plank: +X = ``direction`` (downhill), +Y = horizontal across the
+    plank, +Z = surface normal pointing up out of the top face.
+    """
+
+    start: Vec3
+    end: Vec3
+    width: float = 0.4
+    thickness: float = 0.05
+    rails: bool = False
+
+    def __post_init__(self) -> None:
+        self.start = coerce_vec(self.start)
+        self.end = coerce_vec(self.end)
+
+    def _geometry_issues(self) -> list[Issue]:
+        issues: list[Issue] = []
+        who = self.label
+        check_vec(issues, who, "start", self.start)
+        check_vec(issues, who, "end", self.end)
+        check_dimension(issues, who, "width", self.width, 0.4)
+        check_dimension(issues, who, "thickness", self.thickness, 0.05)
+        if not isinstance(self.rails, bool):
+            issues.append(
+                error(
+                    "INVALID_ARGUMENT",
+                    who,
+                    f"rails must be True or False, got {self.rails!r}",
+                    "use rails=False",
+                )
+            )
+        elif self.rails:
+            # The U-channel ramp is milestone M5 (T-015); refuse instead of silently ignoring.
+            issues.append(
+                error(
+                    "INVALID_ARGUMENT",
+                    who,
+                    "rails=True is not supported by this version",
+                    "use rails=False",
+                )
+            )
+        if isinstance(self.start, Vec3) and isinstance(self.end, Vec3):
+            run = _horizontal(self.end - self.start).length()
+            if self.start.z <= self.end.z:
+                issues.append(
+                    error(
+                        "INVALID_ARGUMENT",
+                        who,
+                        f"start z ({self.start.z:g}) must be higher than end z "
+                        f"({self.end.z:g}); start is the high end of the ramp",
+                        "swap start and end",
+                    )
+                )
+            elif run < MIN_DIMENSION:
+                issues.append(
+                    error(
+                        "INVALID_ARGUMENT",
+                        who,
+                        f"start and end are only {run:g} m apart horizontally; a ramp cannot "
+                        "be vertical",
+                        "move end sideways, e.g. a 20 deg ramp dropping 0.7 m needs ~2 m of "
+                        "horizontal run",
+                    )
+                )
+        return issues
+
+    # -- frame --------------------------------------------------------------------------
+
+    def _frame(self) -> tuple[Vec3, Vec3, Vec3]:
+        """``(direction, side, normal)``: right-handed unit axes of the plank (local X, Y, Z)."""
+        direction = (self.end - self.start).normalized()
+        side = Vec3(0.0, 0.0, 1.0).cross(_horizontal(direction)).normalized()
+        return direction, side, direction.cross(side)
+
+    def _pose(self) -> tuple[Vec3, Mat3]:
+        direction, side, normal = self._frame()
+        # Columns of the rotation matrix are the local axes expressed in world space.
+        rotation = tuple(zip(direction, side, normal, strict=True))
+        # The box center sits half a thickness below the midpoint of the top centerline.
+        center = (self.start + self.end) / 2 - normal * (self.thickness / 2)
+        return center, rotation  # type: ignore[return-value]
+
+    def _mesh(self) -> MeshSpec:
+        return box_mesh((self.end - self.start).length(), self.width, self.thickness)
+
+    def _volume(self) -> float:
+        return (self.end - self.start).length() * self.width * self.thickness
+
+    # -- anchors ------------------------------------------------------------------------
+
+    @property
+    def top(self) -> Vec3:
+        """High end of the top-surface centerline (= ``start``)."""
+        self._require_geometry()
+        return self.start
+
+    @property
+    def bottom(self) -> Vec3:
+        """Low end of the top-surface centerline (= ``end``)."""
+        self._require_geometry()
+        return self.end
+
+    @property
+    def direction(self) -> Vec3:
+        """Unit vector pointing downhill along the top surface (has a negative z)."""
+        self._require_geometry()
+        return self._frame()[0]
+
+    @property
+    def slope_deg(self) -> float:
+        """Inclination of the ramp in degrees (0 = level, 90 = vertical)."""
+        self._require_geometry()
+        drop = self.start.z - self.end.z
+        return math.degrees(math.atan2(drop, _horizontal(self.end - self.start).length()))
+
+    def ball_spawn(self, radius: float = 0.1) -> Vec3:
+        """Center for a ball of ``radius`` m that starts rolling from the top of the ramp.
+
+        The center is ``1.5 * radius`` downhill from the top edge (along the surface) and
+        ``radius + CLEARANCE`` above the surface along its normal, so the ball starts just
+        clear of the plank (no frame-1 overlap) on any slope.
+
+        Raises:
+            RubeValidationError: invalid ramp geometry or a non-positive ``radius``.
+        """
+        self._require_geometry()
+        issues: list[Issue] = []
+        check_number(
+            issues, self.label, "ball_spawn radius", radius, lo=0.0, lo_open=True, unit=" m",
+            hint="pass the ball's radius, e.g. ramp.ball_spawn(0.1)",
+        )  # fmt: skip
+        if issues:
+            raise RubeValidationError(issues)
+        direction, _, normal = self._frame()
+        return self.start + direction * (1.5 * radius) + normal * (radius + CLEARANCE)
+
+    def exit(self, distance: float = 0.0) -> Vec3:
+        """Ground point (z = 0) ``distance`` m beyond the bottom end, along the ramp's heading.
+
+        Use it to place what the rolling ball should hit next, e.g. the first domino.
+
+        Raises:
+            RubeValidationError: invalid ramp geometry.
+        """
+        self._require_geometry()
+        heading = _horizontal(self._frame()[0]).normalized()
+        p = self.end + heading * distance
+        return Vec3(p.x, p.y, 0.0)
+
+
+def _horizontal(v: Vec3) -> Vec3:
+    """``v`` projected onto the XY plane."""
+    return Vec3(v.x, v.y, 0.0)
 
 
 # --- groups and constraints -------------------------------------------------------------

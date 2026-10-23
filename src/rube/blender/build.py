@@ -6,7 +6,7 @@ with ``mesh.from_pydata`` at true size around the origin (scale stays (1, 1, 1) 
 origin is the center of volume by construction, design D-3), set the world matrix, color and
 custom props, then add the rigid body. Specs are built in registration order (determinism).
 
-Implements: FR-020, FR-002 (Blender object gets exactly the entity name).
+Implements: FR-020, FR-002 (Blender object gets exactly the entity name), FR-012 (hinge Empty).
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import bpy
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
-from rube.blender.physics import add_rigid_body
-from rube.entities import BodySpec
+from rube.blender.physics import add_hinge, add_rigid_body
+from rube.entities import BodySpec, HingeSpec
 from rube.machine import Machine
 
 
@@ -30,11 +30,13 @@ class BuildContext:
         scene: Target scene (rigid body world already created).
         objects: Built objects by entity name, in build order.
         bodies: The ``BodySpec`` of each built rigid body, in build order.
+        hinges: The ``HingeSpec`` of each built constraint, in build order.
     """
 
     scene: bpy.types.Scene
     objects: dict[str, bpy.types.Object] = field(default_factory=dict)
     bodies: list[BodySpec] = field(default_factory=list)
+    hinges: list[HingeSpec] = field(default_factory=list)
 
 
 def world_matrix(spec: BodySpec) -> Matrix:
@@ -73,9 +75,36 @@ def build_body(spec: BodySpec, ctx: BuildContext) -> list[bpy.types.Object]:
     return [obj]
 
 
-#: Spec class -> builder. Hinge constraints (``HingeSpec``) join in milestone M6.
+def build_hinge(spec: HingeSpec, ctx: BuildContext) -> list[bpy.types.Object]:
+    """Create the constraint Empty of a hinge (design D-11).
+
+    The Empty sits at the pivot and is rotated so its local Z axis is the hinge axis, because
+    Blender's ``HINGE`` constraint turns about the constraint object's Z. The bodies must
+    already be built (``Machine.bodies()`` come before ``Machine.constraints()``).
+
+    Returns:
+        ``[empty]``, recorded in ``ctx.objects`` / ``ctx.hinges``.
+    """
+    empty = bpy.data.objects.new(spec.name, None)
+    if empty.name != spec.name:
+        raise RuntimeError(f"Blender renamed object {spec.name!r} to {empty.name!r}")
+    ctx.scene.collection.objects.link(empty)
+    rotation = Vector((0.0, 0.0, 1.0)).rotation_difference(Vector(tuple(spec.axis)))
+    matrix = rotation.to_matrix().to_4x4()
+    matrix.translation = tuple(spec.pivot)
+    empty.matrix_world = matrix
+    empty["rube_name"] = spec.name
+    empty["rube_type"] = "Hinge"
+    add_hinge(empty, ctx.objects[spec.body_a], ctx.objects[spec.body_b], spec, ctx.scene)
+    ctx.objects[spec.name] = empty
+    ctx.hinges.append(spec)
+    return [empty]
+
+
+#: Spec class -> builder.
 BUILDERS: dict[type, Callable[[object, BuildContext], list[bpy.types.Object]]] = {
     BodySpec: build_body,
+    HingeSpec: build_hinge,
 }
 
 

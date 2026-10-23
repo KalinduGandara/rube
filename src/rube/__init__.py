@@ -5,15 +5,13 @@ Layer 1 (public API). This module re-exports the public API only; it never impor
 
 Author scripts use::
 
-    from rube import Ball, Domino, Machine, Camera, Ramp, domino_chain, spiral_ramp
-
-A later milestone adds ``Lever`` here.
+    from rube import Ball, Domino, Machine, Camera, Lever, Ramp, domino_chain, spiral_ramp
 """
 
 __version__ = "0.1.0"
 
 from rube.camera import Camera  # noqa: E402 - __version__ first: rube.report imports it
-from rube.entities import CLEARANCE, COLORS, Ball, Block, Domino, Floor, Ramp  # noqa: E402
+from rube.entities import CLEARANCE, COLORS, Ball, Block, Domino, Floor, Lever, Ramp  # noqa: E402
 from rube.errors import Issue, RubeValidationError  # noqa: E402
 from rube.generators import DominoChain, SpiralRamp, domino_chain, spiral_ramp  # noqa: E402
 from rube.machine import Machine  # noqa: E402
@@ -29,6 +27,7 @@ __all__ = [
     "DominoChain",
     "Floor",
     "Issue",
+    "Lever",
     "Machine",
     "Ramp",
     "RubeValidationError",

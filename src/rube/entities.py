@@ -19,19 +19,20 @@ Placement conventions (SPEC section 2): ``Ball.center`` is the sphere center; ``
 degrees; ``facing_deg`` is yaw about +Z with 0 = +X.
 
 Internal entities built by generators: ``SpiralTrack`` (the helix U-channel) and
-``SupportColumn`` (its center post), both created by ``spiral_ramp``. A later milestone adds
-``LeverPlank`` / ``Fulcrum`` and the ``Lever`` group here; concrete ``Entity`` subclasses
-register themselves in ``ENTITY_TYPES`` automatically, so ``entity_from_dict`` needs no edits.
+``SupportColumn`` (its center post), both created by ``spiral_ramp``; ``LeverPlank`` and
+``Fulcrum`` (the seesaw plank and its triangular prism), created by the ``Lever`` group
+defined at the end of this module. Concrete ``Entity`` subclasses register themselves in
+``ENTITY_TYPES`` automatically, so ``entity_from_dict`` needs no edits.
 
 Implements: FR-004, FR-005, FR-006, FR-007, FR-008 (Ramp plank), FR-009 (Ramp rails),
-FR-010 (spiral track + support column bodies), FR-013 (entity-level checks), FR-020
+FR-010 (spiral track + support column bodies), FR-012 (Lever), FR-013 (entity-level checks), FR-020
 (BodySpec / HingeSpec), FR-012 structure (Hinge, Group).
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import KW_ONLY, dataclass, fields
+from dataclasses import KW_ONLY, dataclass, fields, replace
 from typing import Any, ClassVar
 
 from rube.errors import Issue, RubeValidationError, error, has_errors
@@ -42,6 +43,7 @@ from rube.geometry import (
     box_mesh,
     channel_mesh,
     cylinder_mesh,
+    prism_mesh,
     recenter,
     transform_points,
     uv_sphere_mesh,
@@ -74,6 +76,10 @@ RAIL_HEIGHT = 0.08
 SPIRAL_SEGMENTS_PER_TURN = 64
 #: Gap (m) between a spiral's support column and the inner edge of its groove (SPEC 6.2).
 COLUMN_GAP = 0.01
+#: Largest ``Lever.tilt_deg`` magnitude; beyond this the plank would start nearly vertical.
+MAX_LEVER_TILT_DEG = 45.0
+#: Fulcrum base width as a multiple of its height (a steep, stable isosceles prism).
+FULCRUM_BASE_RATIO = 1.0
 
 #: Named preview colors (linear RGBA for Workbench object color).
 COLORS: dict[str, tuple[float, float, float, float]] = {
@@ -133,6 +139,8 @@ DEFAULTS: dict[str, PhysicsDefaults] = {
     "RampRails": PhysicsDefaults(False, 1.0, None, 0.3, 0.0, 0.04, 0.1, 0.005, "wood"),
     "SpiralTrack": PhysicsDefaults(False, 1.0, None, 0.3, 0.0, 0.04, 0.1, 0.005, "wood"),
     "SupportColumn": PhysicsDefaults(False, 1.0, None, 0.5, 0.0, 0.04, 0.1, 0.001, "gray"),
+    "LeverPlank": PhysicsDefaults(True, 1.0, None, 0.5, 0.0, 0.04, 0.1, 0.001, "wood"),
+    "Fulcrum": PhysicsDefaults(False, 1.0, None, 0.5, 0.0, 0.04, 0.1, 0.001, "gray"),
 }
 
 
@@ -1157,6 +1165,124 @@ class SupportColumn(Entity):
         return cylinder_mesh(self.radius, self.height)
 
 
+@dataclass(eq=False)
+class LeverPlank(Entity):
+    """Dynamic seesaw plank of a ``Lever`` (internal; collision ``BOX``, 1 kg).
+
+    The plank's **bottom-center** is the hinge ``pivot`` (it rests on the fulcrum apex).
+    Local frame: +X = ``facing_deg`` (toward the right end), +Y = hinge axis (horizontal,
+    perpendicular to facing), +Z = up. ``tilt_deg`` rotates it about the hinge axis so the
+    right end goes down. It must not start deactivated: a start-deactivated body ignores
+    gravity until struck (SPEC section 5.1).
+
+    Args:
+        pivot: Hinge point on the plank's bottom-center (x, y, z), meters.
+        length: Plank length along facing, meters.
+        width: Plank width along the hinge axis, meters.
+        thickness: Plank thickness, meters.
+        facing_deg: Yaw (degrees) of the plank's long axis; 0 = +X.
+        tilt_deg: Initial tilt in degrees; positive lowers the right end.
+    """
+
+    pivot: Vec3
+    length: float = 2.0
+    width: float = 0.3
+    thickness: float = 0.05
+    facing_deg: float = 0.0
+    tilt_deg: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.pivot = coerce_vec(self.pivot)
+
+    def _geometry_issues(self) -> list[Issue]:
+        issues: list[Issue] = []
+        who = self.label
+        check_vec(issues, who, "pivot", self.pivot)
+        check_dimension(issues, who, "length", self.length, 2.0)
+        check_dimension(issues, who, "width", self.width, 0.3)
+        check_dimension(issues, who, "thickness", self.thickness, 0.05)
+        check_number(
+            issues, who, "facing_deg", self.facing_deg,
+            hint="use an angle in degrees, e.g. facing_deg=90 for a plank along +Y",
+        )  # fmt: skip
+        check_number(
+            issues, who, "tilt_deg", self.tilt_deg,
+            lo=-MAX_LEVER_TILT_DEG, hi=MAX_LEVER_TILT_DEG, unit=" deg",
+            hint=f"use a tilt between -{MAX_LEVER_TILT_DEG:g} and {MAX_LEVER_TILT_DEG:g} degrees",
+        )  # fmt: skip
+        return issues
+
+    def hinge_axis(self) -> Vec3:
+        """Unit horizontal hinge axis: perpendicular to ``facing_deg`` (facing + 90 deg)."""
+        return yaw_vector(self.facing_deg + 90.0)
+
+    def _rotation(self) -> Mat3:
+        # Rotating about +Y (the hinge axis) by +tilt takes +X toward -Z: right end down.
+        return mat_mul(rot_axis(self.hinge_axis(), self.tilt_deg), rot_z(self.facing_deg))
+
+    def _pose(self) -> tuple[Vec3, Mat3]:
+        rotation = self._rotation()
+        # Tilt pivots about the bottom-center, so the center sits half a thickness above it.
+        return self.pivot + mat_vec(rotation, Vec3(0.0, 0.0, self.thickness / 2)), rotation
+
+    def _mesh(self) -> MeshSpec:
+        return box_mesh(self.length, self.width, self.thickness)
+
+    def _volume(self) -> float:
+        return self.length * self.width * self.thickness
+
+    def end_point(self, sign: float) -> Vec3:
+        """Top-surface point at the end of the plank: ``sign`` +1 = right end, -1 = left end."""
+        self._require_geometry()
+        offset = Vec3(sign * self.length / 2, 0.0, self.thickness)
+        return self.pivot + mat_vec(self._rotation(), offset)
+
+
+@dataclass(eq=False)
+class Fulcrum(Entity):
+    """Passive triangular-prism support of a ``Lever`` (internal; collision ``CONVEX_HULL``).
+
+    Isosceles triangle seen along the hinge axis, apex up **at the pivot**, base ``height``
+    below it (default: on the ground), extruded ``depth`` along the hinge axis.
+
+    Args:
+        pivot: Apex point (x, y, z), meters.
+        height: Apex height above the base, meters.
+        depth: Extrusion along the hinge axis, meters (the plank width).
+        facing_deg: Yaw (degrees) of the lever's long axis; the base spans that axis.
+    """
+
+    pivot: Vec3
+    height: float
+    depth: float = 0.3
+    facing_deg: float = 0.0
+
+    COLLISION_SHAPE: ClassVar[str] = "CONVEX_HULL"
+
+    def __post_init__(self) -> None:
+        self.pivot = coerce_vec(self.pivot)
+
+    def _geometry_issues(self) -> list[Issue]:
+        issues: list[Issue] = []
+        who = self.label
+        check_vec(issues, who, "pivot", self.pivot)
+        check_dimension(issues, who, "height", self.height, 0.5)
+        check_dimension(issues, who, "depth", self.depth, 0.3)
+        check_number(
+            issues, who, "facing_deg", self.facing_deg,
+            hint="use an angle in degrees, e.g. facing_deg=90",
+        )  # fmt: skip
+        return issues
+
+    def _pose(self) -> tuple[Vec3, Mat3]:
+        # prism_mesh puts the base at -height/3 (origin = centroid, D-3), so the apex at the
+        # pivot means the center of volume is 2/3 of the height below it.
+        return self.pivot - Vec3(0.0, 0.0, 2 * self.height / 3), rot_z(self.facing_deg)
+
+    def _mesh(self) -> MeshSpec:
+        return prism_mesh(FULCRUM_BASE_RATIO * self.height, self.depth, self.height)
+
+
 # --- groups and constraints -------------------------------------------------------------
 
 
@@ -1301,3 +1427,114 @@ class Group:
     def validate(self) -> list[Issue]:
         """Group-level problems (e.g. chain spacing). Members validate themselves."""
         return []
+
+
+class Lever(Group):
+    """Seesaw: dynamic plank on a passive triangular fulcrum, joined by a hinge (SPEC 5.3).
+
+    Members, in build order: ``Fulcrum``, ``LeverPlank``, ``Hinge`` (axis horizontal and
+    perpendicular to ``facing_deg``, at ``pivot``, plank/fulcrum collisions disabled so the
+    plank can swing through the prism it rests on). The plank's bottom-center is the pivot.
+    No members exist when the arguments are unusable; ``validate()`` then reports them once
+    under the group name (like the generators, design D-23).
+
+    Args:
+        pivot: Hinge point (x, y, z), meters; apex of the fulcrum, bottom-center of the plank.
+        length: Plank length, meters.
+        width: Plank width (along the hinge axis), meters.
+        thickness: Plank thickness, meters.
+        facing_deg: Yaw in degrees of the plank's long axis (0 = +X); ``right_end`` lies on
+            this side of the pivot.
+        tilt_deg: Initial tilt in degrees about the hinge axis; positive lowers
+            ``right_end`` (|tilt| <= 45).
+        fulcrum_height: Fulcrum height in meters; ``None`` = ``pivot.z`` (stands on the ground).
+
+    Anchors:
+        left_end, right_end: Top-surface points at the plank ends (frame-1 pose).
+        pivot, plank, fulcrum, hinge: the parts.
+    """
+
+    def __init__(
+        self,
+        pivot: Any,
+        length: Any = 2.0,
+        width: Any = 0.3,
+        thickness: Any = 0.05,
+        facing_deg: Any = 0.0,
+        tilt_deg: Any = 0.0,
+        fulcrum_height: Any = None,
+    ):
+        self.pivot = coerce_vec(pivot)
+        self.fulcrum_height = fulcrum_height
+        self._plank = LeverPlank(self.pivot, length, width, thickness, facing_deg, tilt_deg)
+        height = fulcrum_height
+        if height is None:  # stands on the ground; 1.0 placeholder keeps arguments reportable
+            height = self.pivot.z if isinstance(self.pivot, Vec3) else 1.0
+        self._fulcrum = Fulcrum(self.pivot, height, width, facing_deg)
+        members: list[Entity | Hinge] = []
+        if not has_errors(self._argument_issues(self.type_name())):
+            hinge = Hinge(self._fulcrum, self._plank, self.pivot, self._plank.hinge_axis())
+            members = [self._fulcrum, self._plank, hinge]
+        super().__init__(members)
+
+    @property
+    def label(self) -> str:
+        """Name for messages: the group name, or ``"Lever"`` before it is named."""
+        return self.name if isinstance(self.name, str) and self.name else self.type_name()
+
+    def _argument_issues(self, who: str) -> list[Issue]:
+        """Problems of the constructor arguments, reported under ``who``."""
+        issues = [replace(i, entity=who) for i in self._plank._geometry_issues()]
+        if self.fulcrum_height is not None:
+            check_dimension(issues, who, "fulcrum_height", self.fulcrum_height, 0.5)
+        elif isinstance(self.pivot, Vec3) and self.pivot.z <= 0:
+            issues.append(
+                error(
+                    "OUT_OF_RANGE",
+                    who,
+                    f"pivot z is {self.pivot.z:g} m, so the default fulcrum height (pivot z) "
+                    "is not positive",
+                    "raise the pivot, e.g. pivot=(0, 0, 0.5), or pass fulcrum_height",
+                )
+            )
+        return issues
+
+    def validate(self) -> list[Issue]:
+        """Argument problems (only while there are no members); members validate themselves."""
+        return [] if self.members else self._argument_issues(self.label)
+
+    # -- parts and anchors --------------------------------------------------------------
+
+    def _require_members(self) -> None:
+        if not self.members:
+            raise RubeValidationError(self._argument_issues(self.label))
+
+    @property
+    def plank(self) -> LeverPlank:
+        """The dynamic plank."""
+        self._require_members()
+        return self._plank
+
+    @property
+    def fulcrum(self) -> Fulcrum:
+        """The passive prism under the plank."""
+        self._require_members()
+        return self._fulcrum
+
+    @property
+    def hinge(self) -> Hinge:
+        """The hinge constraint at the pivot."""
+        self._require_members()
+        return self.members[2]  # type: ignore[return-value]
+
+    @property
+    def left_end(self) -> Vec3:
+        """Top-surface point at the plank end opposite ``facing_deg`` (frame-1 pose)."""
+        self._require_members()
+        return self._plank.end_point(-1.0)
+
+    @property
+    def right_end(self) -> Vec3:
+        """Top-surface point at the plank end on the ``facing_deg`` side (frame-1 pose)."""
+        self._require_members()
+        return self._plank.end_point(1.0)

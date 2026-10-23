@@ -88,7 +88,12 @@ def run_pipeline(spec: dict, out_dir: Path, video: bool) -> dict:
     blend = out_dir / BLEND_NAME
     artifacts = {"frames": [], "video": None, "blend": BLEND_NAME}
 
-    overlaps = simulate.check_overlaps(ctx)
+    # A hinge with disable_collisions lets its two bodies interpenetrate on purpose (the plank
+    # rests on the fulcrum apex), so that pair is not an overlap error.
+    skip_pairs = frozenset(
+        frozenset((h.body_a, h.body_b)) for h in ctx.hinges if h.disable_collisions
+    )
+    overlaps = simulate.check_overlaps(ctx, skip_pairs)
     if overlaps:
         # Do not bake: overlapping bodies explode, and the author needs the fix, not a movie.
         render.save_blend(sc, blend)

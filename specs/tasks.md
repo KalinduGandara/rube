@@ -78,7 +78,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 
 ## M6 — Lever [sonnet]
 
-- [ ] T-017: `Lever` group (plank, fulcrum prism, Hinge), `build_hinge`, overlap skip for disabled-collision pairs; example + A7.
+- [x] T-017: `Lever` group (plank, fulcrum prism, Hinge), `build_hinge`, overlap skip for disabled-collision pairs; example + A7.
   - Requirements: FR-012, FR-021
   - Done when: anchor/axis unit tests; A7 passes.
 

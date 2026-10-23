@@ -2,17 +2,17 @@
 
 Layer 2 (runs inside Blender; imports ``bpy``). The rigid body is added with the whitelisted
 ``rigidbody.object_add`` under ``temp_override`` with explicit objects, so real selection and
-the active object never matter (SPEC section 1.1, NFR-003). Hinge constraints are added here
-in milestone M6.
+the active object never matter (SPEC section 1.1, NFR-003). Hinge constraints are added the
+same way with ``rigidbody.constraint_add`` on an Empty (design D-11).
 
-Implements: FR-020 (rigid body part).
+Implements: FR-020 (rigid body part), FR-012 (hinge constraint).
 """
 
 from __future__ import annotations
 
 import bpy
 
-from rube.entities import BodySpec
+from rube.entities import BodySpec, HingeSpec
 
 
 def add_rigid_body(obj: bpy.types.Object, spec: BodySpec, scene: bpy.types.Scene) -> None:
@@ -43,3 +43,37 @@ def add_rigid_body(obj: bpy.types.Object, spec: BodySpec, scene: bpy.types.Scene
     rb.collision_margin = spec.margin
     rb.use_deactivation = spec.use_deactivation
     rb.use_start_deactivated = spec.start_deactivated
+
+
+def add_hinge(
+    empty: bpy.types.Object,
+    body_a: bpy.types.Object,
+    body_b: bpy.types.Object,
+    spec: HingeSpec,
+    scene: bpy.types.Scene,
+) -> None:
+    """Turn ``empty`` into a ``HINGE`` rigid body constraint between two rigid bodies.
+
+    Blender hinges rotate about the constraint object's local Z axis, so the caller must have
+    placed ``empty`` at the pivot with its Z axis along the hinge axis (design D-11).
+
+    Args:
+        empty: Empty object already linked into ``scene`` at the pivot.
+        body_a: First body (the passive fulcrum).
+        body_b: Second body (the dynamic plank).
+        spec: Resolved hinge; ``disable_collisions`` is applied to the pair.
+        scene: Scene with a rigid body world.
+    """
+    with bpy.context.temp_override(
+        scene=scene,
+        object=empty,
+        active_object=empty,
+        selected_objects=[empty],
+        selected_editable_objects=[empty],
+    ):
+        # Also creates the "RigidBodyConstraints" collection in rigidbody_world.constraints.
+        bpy.ops.rigidbody.constraint_add(type="HINGE")
+    constraint = empty.rigid_body_constraint
+    constraint.object1 = body_a
+    constraint.object2 = body_b
+    constraint.disable_collisions = spec.disable_collisions

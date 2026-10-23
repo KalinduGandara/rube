@@ -3,10 +3,11 @@
 Each test runs ``python -m rube.cli run <script> --out <tmp>`` (Blender found via
 ``RUBE_BLENDER`` or the default path, see ``conftest.py``) and asserts on ``report.json``.
 Milestone M2 covers A1, A8, A11 and determinism (A1 twice, NFR-004); M3 adds A2-A5 and A9
-(A5 twice); M4 adds A10, A12; M5 adds A6; later milestones add the other scenarios here.
+(A5 twice); M4 adds A10, A12; M5 adds A6; M6 adds A7; later milestones add the other scenarios here.
 """
 
 import json
+import math
 import os
 import struct
 import subprocess
@@ -290,3 +291,46 @@ def test_a6_ball_through_spiral(tmp_path, blender_exe):
     line = next(ln for ln in proc.stdout.splitlines() if ln.startswith("min_distance="))
     min_distance = float(line.split()[0].split("=")[1])
     assert min_distance < 0.3, line
+
+
+def test_a7_lever(tmp_path, blender_exe):
+    """A7 / FR-012: a ball dropped on one end of a Lever -> the other end rises >= 0.1 m.
+
+    The report has no plank end height (schema stays SPEC section 9.2), so it is derived:
+    the plank only rotates about the hinge, and its final tilt theta lifts the far end by
+    (length / 2) * sin(theta) above its start (length 2.0 m, level at the start).
+    """
+    code, report, output = rube_run(EXAMPLES / "a7_lever.py", tmp_path, blender_exe)
+    assert code == 0, output
+    assert report["status"] == "ok", report
+    assert "OVERLAP" not in {i["code"] for i in report["issues"]}
+    plank = entity(report, "LeverPlank_1")
+    rise = 1.0 * math.sin(math.radians(plank["final_tilt_deg"]))
+    assert rise >= 0.1, plank
+    # The hinge keeps the plank on its pivot: its center stays within a plank thickness.
+    assert plank["final_position"][2] == pytest.approx(0.525, abs=0.3)
+    assert abs(plank["final_position"][0]) < 0.05 and abs(plank["final_position"][1]) < 0.05
+    assert entity(report, "Ball_1")["left_bounds"] is False
+
+
+def test_overlap_skips_hinged_pairs_with_collisions_disabled(tmp_path, blender_exe):
+    """FR-012 / FR-021 (T-017): two overlapping blocks joined by a Hinge are an OVERLAP
+    only when the hinge keeps their collisions enabled."""
+    template = """
+        from rube import Block, Machine
+        from rube.entities import Hinge
+        machine = Machine(duration=1)
+        a = machine.add(Block(position=(0, 0, 1), size=(0.4, 0.4, 0.4), name="a"))
+        # Offset in y/z and narrower so no faces are coplanar (BVH ignores coplanar contact).
+        b = machine.add(Block(position=(0.2, 0.05, 1.1), size=(0.4, 0.3, 0.4), name="b"))
+        machine._register(Hinge(a, b, (0.1, 0, 1.2), (0, 1, 0), disable_collisions={flag}))
+        """
+    code, report, output = rube_run(
+        write_script(tmp_path, "off.py", template.format(flag=True)), tmp_path / "off", blender_exe
+    )
+    assert code == 0 and "OVERLAP" not in {i["code"] for i in report["issues"]}, output
+    code, report, output = rube_run(
+        write_script(tmp_path, "on.py", template.format(flag=False)), tmp_path / "on", blender_exe
+    )
+    assert code == 2, output
+    assert [i["entity"] for i in report["issues"] if i["code"] == "OVERLAP"] == ["a,b"]

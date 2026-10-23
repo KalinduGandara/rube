@@ -21,7 +21,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 
 ## M1 — Layer 1 core [opus]
 
-- [ ] T-003: `vec.py` (Vec3, `as_vec3`, rotation-matrix helpers) and `errors.py` (Issue, codes, RubeValidationError).
+- [x] T-003: `vec.py` (Vec3, `as_vec3`, rotation-matrix helpers) and `errors.py` (Issue, codes, RubeValidationError).
   - Requirements: FR-003, FR-013
   - Done when: `tests/unit/test_vec.py`, `test_errors.py` pass.
 - [ ] T-004: `geometry.py` primitives: `MeshSpec`, `box_mesh`, `uv_sphere_mesh(32,16)`, `cylinder_mesh`, `prism_mesh`, AABB helpers.

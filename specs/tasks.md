@@ -24,7 +24,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 - [x] T-003: `vec.py` (Vec3, `as_vec3`, rotation-matrix helpers) and `errors.py` (Issue, codes, RubeValidationError).
   - Requirements: FR-003, FR-013
   - Done when: `tests/unit/test_vec.py`, `test_errors.py` pass.
-- [ ] T-004: `geometry.py` primitives: `MeshSpec`, `box_mesh`, `uv_sphere_mesh(32,16)`, `cylinder_mesh`, `prism_mesh`, AABB helpers.
+- [x] T-004: `geometry.py` primitives: `MeshSpec`, `box_mesh`, `uv_sphere_mesh(32,16)`, `cylinder_mesh`, `prism_mesh`, AABB helpers.
   - Requirements: FR-005, FR-006, FR-020
   - Done when: `test_geometry.py` checks vertex counts, bounds = true size, centroid at origin, closed (every edge shared by 2 faces).
 - [ ] T-005: `entities.py`: PhysicsProps, `DEFAULTS`, `COLORS`, Entity, Floor, Ball, Block, Domino (tilt, deactivation), anchors, `validate()`, `body()` → BodySpec.

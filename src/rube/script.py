@@ -7,10 +7,21 @@ Script contract (SPEC section 10.1): the script defines a top-level variable ``m
 type ``Machine`` and never calls ``bpy`` or any run method.
 
 Before executing, the source is parsed with ``ast`` and rejected (``DISALLOWED_IMPORT``) if it
-imports anything but ``rube`` (and submodules), ``math`` or ``random``, or mentions the names
-``__import__``, ``eval``, ``exec`` or ``open``. This is a **guard rail, not a sandbox**: it
-catches an LLM reaching for the filesystem or Blender by mistake, but determined code can get
-around it. Run untrusted scripts in a container.
+imports anything but ``math``, ``random``, ``rube`` or a public ``rube`` API module (never
+``rube.cli``, ``rube.script``, ``rube.report``, ``rube.blender*``, which hold ``os``,
+``subprocess`` and file access); mentions a name in ``FORBIDDEN_NAMES`` (``__import__``,
+``eval``, ``exec``, ``open``, ``__builtins__``, ``getattr``, ``globals``, ...); or reads a dunder
+attribute (``x.__globals__``) or a frame/generator internal (``gi_frame``, ``f_globals``, ...).
+A script that passes runs with a curated ``__builtins__`` (``SAFE_BUILTINS``: the arithmetic,
+container, iteration and exception builtins a machine script needs), whose ``__import__``
+re-checks every import at run time and hands out *public views* of ``rube`` and ``random``
+(their ``__all__`` only): the real ``rube`` package also carries every submodule already
+loaded (``rube.cli`` in the CLI) and ``random`` keeps ``os`` as ``random._os`` (design D-28).
+
+This is still a **guard rail, not a sandbox**: it catches an LLM reaching for the filesystem
+or Blender by mistake and closes the obvious escape hatches, but determined code can get
+around it (``str.format`` can still *read* attributes, for one). Run untrusted scripts in a
+container.
 
 Implements: FR-016, NFR-006.
 """
@@ -18,21 +29,70 @@ Implements: FR-016, NFR-006.
 from __future__ import annotations
 
 import ast
+import builtins
+import importlib
+import pkgutil
+import sys
 import traceback
+import types
 from pathlib import Path
 
 from rube.errors import Issue, RubeValidationError, error
 from rube.machine import Machine
 
-#: Top-level modules a script may import.
-ALLOWED_MODULES = ("rube", "math", "random")
-#: Builtin names a script may not mention at all.
-FORBIDDEN_NAMES = ("__import__", "eval", "exec", "open")
+#: Public API modules of the ``rube`` package an author script may import (design D-28).
+PUBLIC_RUBE_MODULES = (
+    "rube",
+    "rube.camera",
+    "rube.entities",
+    "rube.errors",
+    "rube.generators",
+    "rube.geometry",
+    "rube.machine",
+    "rube.vec",
+)
+#: Every module a script may import (exact names; no other submodules).
+ALLOWED_MODULES = ("math", "random", *PUBLIC_RUBE_MODULES)
+#: Names a script may not mention at all: dynamic code, files, interactive input, and the
+#: introspection builtins that reach any attribute or namespace by string.
+FORBIDDEN_NAMES = (
+    "__import__", "eval", "exec", "open", "__builtins__", "getattr", "setattr", "delattr",
+    "globals", "locals", "vars", "compile", "breakpoint", "input",
+)  # fmt: skip
+#: Non-dunder attributes that lead from a generator, coroutine, frame or traceback to
+#: another module's globals or the real builtins (dunder attributes are rejected wholesale).
+FORBIDDEN_ATTRIBUTES = frozenset(
+    {
+        "gi_frame", "gi_code", "cr_frame", "cr_code", "ag_frame", "ag_code",
+        "f_back", "f_builtins", "f_code", "f_globals", "f_locals", "tb_frame", "tb_next",
+    }
+)  # fmt: skip
+#: Builtins available to a script (plus ``__import__`` = ``_guarded_import``): enough for
+#: arithmetic, containers, loops, classes, printing and catching the usual exceptions.
+SAFE_BUILTIN_NAMES = (
+    "abs", "all", "any", "bool", "chr", "classmethod", "dict", "divmod", "enumerate",
+    "filter", "float", "format", "frozenset", "hasattr", "hash", "int", "isinstance",
+    "issubclass", "iter", "len", "list", "map", "max", "min", "next", "object", "ord", "pow",
+    "print", "property", "range", "repr", "reversed", "round", "set", "slice", "sorted",
+    "staticmethod", "str", "sum", "super", "tuple", "zip", "__build_class__",
+    "None", "True", "False", "Ellipsis", "NotImplemented",
+    "ArithmeticError", "AssertionError", "AttributeError", "Exception", "IndexError",
+    "KeyError", "LookupError", "NotImplementedError", "OverflowError", "RuntimeError",
+    "StopIteration", "TypeError", "ValueError", "ZeroDivisionError",
+)  # fmt: skip
 
 _IMPORT_HINT = (
-    f"only import {', '.join(ALLOWED_MODULES)}; describe the machine with the rube API "
-    "(no files, no bpy, no other libraries)"
+    "only import math, random and the public rube API (from rube import ...); describe the "
+    "machine with the rube API (no files, no bpy, no other libraries, no introspection)"
 )
+
+
+def _private_rube_submodules() -> frozenset[str]:
+    """Short names of ``rube`` submodules that are not public (``cli``, ``blender``, ...)."""
+    import rube  # local: the package imports this module's dependencies first
+
+    public = {name.split(".")[1] for name in PUBLIC_RUBE_MODULES if "." in name}
+    return frozenset(m.name for m in pkgutil.iter_modules(rube.__path__)) - public
 
 
 def check_source(source: str, filename: str) -> list[Issue]:
@@ -63,20 +123,75 @@ def check_source(source: str, filename: str) -> list[Issue]:
         issue = error("DISALLOWED_IMPORT", None, f"line {node.lineno}: {what}", _IMPORT_HINT)
         found.append((node.lineno, issue))
 
+    private = _private_rube_submodules()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.split(".")[0] not in ALLOWED_MODULES:
+                if alias.name not in ALLOWED_MODULES:
                     disallow(node, f"import of {alias.name!r} is not allowed")
         elif isinstance(node, ast.ImportFrom):
             if node.level:
                 disallow(node, "relative import (from . import ...) is not allowed")
-            elif (node.module or "").split(".")[0] not in ALLOWED_MODULES:
+            elif node.module not in ALLOWED_MODULES:
                 disallow(node, f"import from {node.module!r} is not allowed")
+            elif node.module == "rube":
+                # `from rube import cli` reaches a private submodule as a package attribute.
+                for alias in node.names:
+                    if alias.name in private:
+                        disallow(node, f"import of 'rube.{alias.name}' is not allowed")
         elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
             disallow(node, f"use of {node.id!r} is not allowed")
+        elif isinstance(node, ast.Attribute) and (
+            node.attr.startswith("__") or node.attr in FORBIDDEN_ATTRIBUTES
+        ):
+            # Dunder attributes (__globals__, __class__, __subclasses__, ...) and frame
+            # internals are the standard ways from any object back to real modules.
+            disallow(node, f"access to attribute {node.attr!r} is not allowed")
     # ast.walk is breadth-first; report in source order (stable sort keeps same-line order).
     return [issue for _, issue in sorted(found, key=lambda pair: pair[0])]
+
+
+def _public_view(module: types.ModuleType) -> types.ModuleType:
+    """A stand-in module exposing only ``module.__all__`` (plus public ``rube`` submodules).
+
+    Why: the real ``rube`` package also has every *loaded* submodule as an attribute (the CLI
+    has loaded ``rube.cli``, which holds ``os`` and ``subprocess``), and ``random`` keeps
+    ``os`` as ``random._os``; neither is visible to the static guard.
+    """
+    view = types.ModuleType(module.__name__, module.__doc__)
+    names = list(module.__all__)
+    if module.__name__ == "rube":
+        names += [name.split(".")[1] for name in PUBLIC_RUBE_MODULES if "." in name]
+    for name in names:
+        setattr(view, name, getattr(module, name))
+    view.__all__ = list(module.__all__)
+    return view
+
+
+#: Modules a script receives as a public view (``_public_view``) instead of the real one.
+_VIEWED_MODULES = ("rube", "random")
+
+
+def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: A002
+    """``__import__`` for author scripts: allowed modules only, ``rube``/``random`` as views.
+
+    Mirrors the builtin's contract: ``import a.b`` gets the top package ``a``, ``from a.b
+    import x`` gets ``a.b`` itself.
+    """
+    if level or name not in ALLOWED_MODULES:
+        raise ImportError(f"import of {name!r} is not allowed in a machine script")
+    module = importlib.import_module(name)
+    if not fromlist:
+        module = sys.modules[name.split(".")[0]]
+    return _public_view(module) if module.__name__ in _VIEWED_MODULES else module
+
+
+def safe_builtins() -> dict:
+    """Fresh ``__builtins__`` mapping for one script run (``SAFE_BUILTIN_NAMES`` + import)."""
+    return {
+        **{name: getattr(builtins, name) for name in SAFE_BUILTIN_NAMES},
+        "__import__": _guarded_import,
+    }
 
 
 def _script_error(exc: BaseException, path: Path) -> Issue:
@@ -119,7 +234,11 @@ def load_machine(path: str | Path) -> tuple[Machine | None, list[Issue]]:
     issues = check_source(source, path.name)
     if issues:
         return None, issues
-    namespace = {"__name__": "__rube_script__", "__file__": str(path)}
+    namespace = {
+        "__name__": "__rube_script__",
+        "__file__": str(path),
+        "__builtins__": safe_builtins(),
+    }
     try:
         # compile with the real path so traceback frames can be matched to the script.
         exec(compile(source, str(path), "exec"), namespace)  # noqa: S102 - guarded above

@@ -49,6 +49,26 @@ def test_allowed_imports_pass():
         ("exec('x = 1')", "exec"),
         ("f = open('secrets.txt')", "open"),
         ("def f():\n    import subprocess\n", "subprocess"),
+        # Review finding 3: non-public rube modules, escape-hatch names, dunder attributes.
+        ("import rube.cli", "rube.cli"),
+        ("from rube.cli import subprocess", "rube.cli"),
+        ("from rube import cli", "cli"),
+        ("from rube import script as s", "script"),
+        ("import rube.report", "rube.report"),
+        ("from rube.blender.build import BuildContext", "rube.blender.build"),
+        ("import rube.blender", "rube.blender"),
+        ("b = __builtins__", "__builtins__"),
+        ("f = getattr(1, 'real')", "getattr"),
+        ("setattr(x, 'y', 1)", "setattr"),
+        ("delattr(x, 'y')", "delattr"),
+        ("g = globals()", "globals"),
+        ("g = locals()", "locals"),
+        ("g = vars()", "vars"),
+        ("c = compile('1', 'f', 'eval')", "compile"),
+        ("breakpoint()", "breakpoint"),
+        ("x = input()", "input"),
+        ("f = (1).__class__", "__class__"),
+        ("g = (x for x in ()).gi_frame", "gi_frame"),
     ],
 )
 def test_disallowed_imports_and_names(source, needle):
@@ -57,6 +77,98 @@ def test_disallowed_imports_and_names(source, needle):
     assert issue.code == "DISALLOWED_IMPORT" and issue.severity == "error"
     assert needle in issue.message and "line" in issue.message
     assert "rube" in issue.hint and "math" in issue.hint
+
+
+BYPASSES = {
+    # Review finding 3: all four passed `rube check` before the fix.
+    "cli_os": "import rube.cli\nrube.cli.os.environ['RUBE_PWNED'] = '1'\n",
+    "cli_subprocess": "from rube.cli import subprocess\nsubprocess.run(['echo', 'pwned'])\n",
+    "builtins_import": "__builtins__['__imp' + 'ort__']('os')\n",
+    "init_globals": "from rube import Machine\ng = Machine.__init__.__globals__\n",
+}
+
+
+@pytest.mark.parametrize("source", BYPASSES.values(), ids=BYPASSES.keys())
+def test_guard_bypasses_are_rejected(tmp_path, source):
+    """FR-016 (T-019 review finding 3): the reviewer's bypasses are DISALLOWED_IMPORT, unrun."""
+    machine, issues = load_machine(write(tmp_path, source + "raise RuntimeError('ran')\n"))
+    assert machine is None and issues
+    assert {i.code for i in issues} == {"DISALLOWED_IMPORT"}
+
+
+def test_public_rube_modules_allowed():
+    """FR-016: the public API modules stay importable (examples and tests use them)."""
+    source = textwrap.dedent(
+        """
+        import rube.entities
+        from rube.entities import Hinge
+        from rube.generators import SpiralRamp
+        from rube.camera import Camera
+        from rube.machine import Machine
+        from rube.vec import Vec3
+        from rube.geometry import catmull_rom
+        from rube.errors import Issue
+        from rube import *
+        machine._register(None)
+        """
+    )
+    assert check_source(source, "m.py") == []
+
+
+@pytest.mark.parametrize(
+    ("source", "needle"),
+    [
+        # `rube` is a real package whose attributes include every submodule already loaded
+        # (the CLI loads rube.cli and rube.script), so `import rube` must not expose them.
+        ("import rube\nx = rube.cli\n", "cli"),
+        ("import rube\nx = rube.script\n", "script"),
+        # `random` keeps `os` as the private attribute `_os`.
+        ("import random\nx = random._os\n", "_os"),
+        # Only the curated builtins exist at run time.
+        ("x = type(1)\n", "type"),
+        ("x = memoryview(b'')\n", "memoryview"),
+    ],
+)
+def test_runtime_namespace_is_curated(tmp_path, source, needle):
+    """FR-016: modules and builtins the guard cannot see statically are absent at run time."""
+    import rube.cli  # noqa: F401 - make sure the rube package carries the attribute
+
+    machine, (issue,) = load_machine(write(tmp_path, source))
+    assert machine is None and issue.code == "SCRIPT_ERROR" and needle in issue.message
+
+
+def test_curated_builtins_cover_normal_scripts(tmp_path):
+    """FR-016: the builtins a normal machine script uses are all available."""
+    path = write(
+        tmp_path,
+        """
+        import math
+        from rube import Ball, Machine, Vec3
+
+        class Spacing:
+            def __init__(self, step):
+                self.step = step
+
+            @property
+            def double(self):
+                return 2 * self.step
+
+        xs = [round(abs(x) * Spacing(0.5).double, 3) for x in range(-2, 3)]
+        pairs = list(zip(sorted(set(xs)), reversed(tuple(xs))))
+        total = sum(min(a, b) + max(a, b) for a, b in pairs) + len(dict(a=1)) + pow(2, 1)
+        for i, (a, b) in enumerate(pairs):
+            assert isinstance(a, (int, float)) and bool(str(b)) and all([i >= 0]) and any([1])
+        try:
+            float("nope")
+        except ValueError as exc:
+            message = f"{exc!r} {int('3')} {math.pi:.2f} {divmod(7, 2)} {hasattr(Vec3, 'x')}"
+        print(message, total, frozenset(), list(map(abs, filter(None, [0, -1]))), next(iter([1])))
+        machine = Machine(duration=2)
+        machine.add(Ball((0, 0, 1)))
+        """,
+    )
+    machine, issues = load_machine(path)
+    assert issues == [] and isinstance(machine, Machine)
 
 
 def test_guard_collects_all_violations():

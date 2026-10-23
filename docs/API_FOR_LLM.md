@@ -2,7 +2,10 @@
 
 Write ONE Python script that defines `machine = Machine(...)`. Check it with `rube check script.py`
 (no Blender, instant, lists ALL problems), then `rube run script.py --out out/ [--video]`.
-Allowed imports: `rube`, `math`, `random` only. Fix every `error` issue using its `hint`.
+Allowed imports: `rube` (and its public modules such as `rube.entities`), `math`, `random`
+only. No `__dunder__` attributes, `getattr`/`globals`/`vars`/`eval`/`exec`/`open`/`input`; only
+everyday builtins (`range`, `len`, `min`, `print`, ...).
+Fix every `error` issue using its `hint`.
 
 ## Conventions
 - Meters, kilograms, seconds, **degrees** for every angle (`facing_deg`, `tilt_deg`, `slope_deg`).

@@ -136,3 +136,39 @@ def test_a2_ball_rolls_down_ramp(tmp_path, blender_exe):
     assert ball["left_bounds"] is False
     # Passive ramp is not in the entity records.
     assert [e["name"] for e in report["entities"]] == ["Ball_1"]
+
+
+def fall_frames(report):
+    """Domino name -> frame of its ``fell_over`` event."""
+    return {e["entity"]: e["frame"] for e in report["events"] if e["event"] == "fell_over"}
+
+
+def dominoes(report):
+    """Domino entity records in chain (build) order."""
+    return [e for e in report["entities"] if e["type"] == "Domino"]
+
+
+def test_a3_straight_chain(tmp_path, blender_exe):
+    """A3 / FR-011, FR-007: 20-domino chain, tilt_first_deg=10 -> all 20 fell over, and the
+    fall frames strictly increase along the chain."""
+    code, report, output = rube_run(EXAMPLES / "a3_domino_chain.py", tmp_path, blender_exe)
+    assert code == 0, output
+    assert report["status"] == "ok", report
+    chain = dominoes(report)
+    assert len(chain) == 20
+    assert [d["name"] for d in chain if not d["fell_over"]] == []
+    frames = fall_frames(report)
+    ordered = [frames[d["name"]] for d in chain]
+    assert all(a < b for a, b in zip(ordered, ordered[1:], strict=False)), ordered
+    assert "UNSTABLE" not in {i["code"] for i in report["issues"]}
+
+
+def test_a4_curved_chain(tmp_path, blender_exe):
+    """A4 / FR-011: chain along a 90 deg curve through 3 waypoints -> all dominoes fell over."""
+    code, report, output = rube_run(EXAMPLES / "a4_curved_chain.py", tmp_path, blender_exe)
+    assert code == 0, output
+    assert report["status"] == "ok", report
+    chain = dominoes(report)
+    assert len(chain) >= 10
+    assert [d["name"] for d in chain if not d["fell_over"]] == []
+    assert "UNSTABLE" not in {i["code"] for i in report["issues"]}

@@ -5,9 +5,9 @@ Layer 1 (public API). This module re-exports the public API only; it never impor
 
 Author scripts use::
 
-    from rube import Ball, Domino, Machine, Camera
+    from rube import Ball, Domino, Machine, Camera, Ramp, domino_chain
 
-Later milestones add ``Lever``, ``domino_chain`` and ``spiral_ramp`` here.
+Later milestones add ``Lever`` and ``spiral_ramp`` here.
 """
 
 __version__ = "0.1.0"
@@ -15,6 +15,7 @@ __version__ = "0.1.0"
 from rube.camera import Camera  # noqa: E402 - __version__ first: rube.report imports it
 from rube.entities import CLEARANCE, COLORS, Ball, Block, Domino, Floor, Ramp  # noqa: E402
 from rube.errors import Issue, RubeValidationError  # noqa: E402
+from rube.generators import DominoChain, domino_chain  # noqa: E402
 from rube.machine import Machine  # noqa: E402
 from rube.vec import Vec3  # noqa: E402
 
@@ -25,6 +26,7 @@ __all__ = [
     "Block",
     "Camera",
     "Domino",
+    "DominoChain",
     "Floor",
     "Issue",
     "Machine",
@@ -32,4 +34,5 @@ __all__ = [
     "RubeValidationError",
     "Vec3",
     "__version__",
+    "domino_chain",
 ]

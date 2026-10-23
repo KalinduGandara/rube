@@ -9,14 +9,17 @@ so no ``transform_apply`` / ``origin_set`` is ever needed. Faces are wound count
 seen from outside (outward normals) and every mesh is a closed solid, which Bullet's ``MESH``
 shape and the BVH overlap check rely on.
 
-Later milestones add ``channel_mesh``, ``catmull_rom`` and ``ArcLengthTable`` here.
+Paths: ``catmull_rom`` turns waypoints into a dense polyline through them and
+``ArcLengthTable`` maps arc length to points/tangents on it, so generators can place parts at
+equal arc length (design section 6). A later milestone adds ``channel_mesh`` here.
 
-Implements: FR-005, FR-006, FR-020 (mesh data for builders), FR-013 (AABB helpers for
-MASS_RATIO / auto camera).
+Implements: FR-005, FR-006, FR-011 (spline + arc-length resampling), FR-020 (mesh data for
+builders), FR-013 (AABB helpers for MASS_RATIO / auto camera).
 """
 
 from __future__ import annotations
 
+import bisect
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -181,3 +184,97 @@ def aabb_gap(a: AABB, b: AABB) -> float:
         max(0.0, b[0].z - a[1].z, a[0].z - b[1].z),
     ]
     return math.sqrt(sum(c * c for c in d))
+
+
+# --- paths ----------------------------------------------------------------------------------
+
+
+def catmull_rom(points: Sequence[Vec3], samples_per_segment: int = 200) -> list[Vec3]:
+    """Dense polyline along a uniform Catmull-Rom spline **through** every waypoint.
+
+    The curve needs one phantom control point beyond each end. They are extrapolated
+    quadratically (``P[-1] = 3 P0 - 3 P1 + P2``), so the end tangents follow the parabola
+    through the first / last three waypoints (design D-23); with two waypoints the phantoms
+    are extrapolated linearly and the curve is the straight segment.
+    Why not duplicated end points: they force the end tangent onto the chord to the next
+    waypoint, which makes the curve sag and then turn sharply near a corner waypoint (three
+    points on a quarter circle would turn only 45 degrees instead of 90).
+    Why uniform (not centripetal): flat, gently curving domino paths have no cusps or loops.
+
+    Args:
+        points: Two or more waypoints (meters), consecutive ones distinct.
+        samples_per_segment: Polyline points per waypoint-to-waypoint segment.
+
+    Returns:
+        ``(len(points) - 1) * samples_per_segment + 1`` points; index
+        ``k * samples_per_segment`` is waypoint ``k``.
+    """
+    if len(points) == 2:
+        head, tail = points[0] * 2.0 - points[1], points[-1] * 2.0 - points[-2]
+    else:
+        head = points[0] * 3.0 - points[1] * 3.0 + points[2]
+        tail = points[-1] * 3.0 - points[-2] * 3.0 + points[-3]
+    ctrl = [head, *points, tail]
+    out: list[Vec3] = []
+    for i in range(1, len(ctrl) - 2):
+        p0, p1, p2, p3 = ctrl[i - 1], ctrl[i], ctrl[i + 1], ctrl[i + 2]
+        for j in range(samples_per_segment):
+            t = j / samples_per_segment
+            t2, t3 = t * t, t * t * t
+            # Standard uniform Catmull-Rom basis (tension 0.5).
+            out.append(
+                (
+                    p1 * 2.0
+                    + (p2 - p0) * t
+                    + (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2
+                    + (p1 * 3.0 - p0 - p2 * 3.0 + p3) * t3
+                )
+                * 0.5
+            )
+    out.append(points[-1])
+    return out
+
+
+class ArcLengthTable:
+    """Cumulative arc-length table of a polyline, inverted by binary search.
+
+    Placing objects at equal *arc length* (not equal spline parameter, which bunches them up
+    where the spline is slow) needs the inverse map s -> point; this is it (SPEC 6.1).
+
+    Args:
+        polyline: Two or more points (meters), e.g. from ``catmull_rom``.
+
+    Attributes:
+        length: Total length in meters.
+    """
+
+    def __init__(self, polyline: Sequence[Vec3]):
+        self.points = list(polyline)
+        self.cumulative = [0.0]
+        for a, b in zip(self.points, self.points[1:], strict=False):
+            self.cumulative.append(self.cumulative[-1] + (b - a).length())
+        self.length = self.cumulative[-1]
+
+    def _segment(self, s: float) -> tuple[int, float]:
+        """Index ``i`` of the segment ``points[i] -> points[i + 1]`` holding ``s``, and the
+        fraction along it; ``s`` is clamped to ``[0, length]``. Zero-length segments are
+        skipped by ``bisect`` because their cumulative values are equal."""
+        s = min(max(s, 0.0), self.length)
+        i = bisect.bisect_right(self.cumulative, s) - 1
+        i = min(max(i, 0), len(self.points) - 2)
+        seg = self.cumulative[i + 1] - self.cumulative[i]
+        return i, (s - self.cumulative[i]) / seg if seg > 0 else 0.0
+
+    def point_at(self, s: float) -> Vec3:
+        """Point at arc length ``s`` meters from the start (clamped to the path)."""
+        i, f = self._segment(s)
+        a, b = self.points[i], self.points[i + 1]
+        return a + (b - a) * f
+
+    def tangent_at(self, s: float) -> Vec3:
+        """Unit direction of travel at arc length ``s`` (finite difference of the polyline)."""
+        i, _ = self._segment(s)
+        # Step back over zero-length segments so a duplicated point still yields a direction.
+        while i > 0 and self.cumulative[i + 1] == self.cumulative[i]:
+            i -= 1
+        return (self.points[i + 1] - self.points[i]).normalized()

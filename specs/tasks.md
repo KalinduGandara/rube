@@ -54,7 +54,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 - [x] T-011: `Ramp` plank + anchors (`ball_spawn`, `exit`, `slope_deg`, `direction`); example + test A2.
   - Requirements: FR-008
   - Done when: unit anchor tests pass; A2 passes.
-- [ ] T-012: `geometry.catmull_rom`, `ArcLengthTable`; `generators.domino_chain` + validation; examples + tests A3, A4.
+- [x] T-012: `geometry.catmull_rom`, `ArcLengthTable`; `generators.domino_chain` + validation; examples + tests A3, A4.
   - Requirements: FR-011
   - Done when: spacing uniformity (< 1 mm), yaw follows tangent, CHAIN_* codes unit-tested; A3, A4 pass.
 - [ ] T-013: Ball → ramp → chain example; A5 and A9 (A5 twice, 1e-6).

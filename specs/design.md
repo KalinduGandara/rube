@@ -152,7 +152,8 @@ Exactly SPEC §9.2. Status → exit code: `ok 0, invalid 2, bake_failed 3, timeo
   perpendicular to facing, around the bottom front edge; the resulting center and rotation
   matrix go into `BodySpec`. Pure `vec.py` math.
 - **Chain placement (FR-011)**: Catmull-Rom (centripetal is unnecessary for flat smooth
-  paths; uniform parameterisation with duplicated end points) sampled at ≥ 200 points per
+  paths; uniform parameterisation with quadratically extrapolated phantom end points, D-23;
+  linear for 2 waypoints) sampled at ≥ 200 points per
   segment; cumulative length table; invert by binary search + linear interpolation to get
   points at `k · spacing`. With `count`, spacing = `L / (count − 1)`. Tangent = finite
   difference on the spline.
@@ -219,3 +220,4 @@ Commands: `pytest tests/unit`, `pytest -m blender tests/blender`, `ruff check . 
 | D-20 | `rube run` deletes a stale `report.json` before starting Blender, and overwrites the report's `elapsed_s` with the CLI's total wall time; `bootstrap` adds the machine's validation warnings to the report | Trust whatever file is there; Blender-only time | A leftover report must never be mistaken for a fresh one (missing-report fallback); authors care about end-to-end time; warnings found by `rube check` belong in the run report too. |
 | D-21 | Milestone M2 saves `machine.blend` (trivial `wm.save_as_mainfile`) but renders nothing (`frames: []`); `--video` is accepted and ignored until M4 | Leave `.blend` for M4 | The `.blend` is cheap and useful for inspecting failures now; rendering is M4 (T-014). |
 | D-22 | `Ramp` plank: local frame X = downhill `direction`, Y = horizontal across, Z = up normal; box hangs `thickness` below the start→end top centerline; no clearance lift (passive). `exit(distance)` returns a point at **z = 0** (ground top, SPEC "ground-level"). Default color `wood`. Until M5 (T-015), `rails=True` is reported as `INVALID_ARGUMENT` instead of being silently ignored | `exit` at `end.z`; ignoring `rails` | Ground level is what the next part (dominoes) stands on; refusing an unimplemented option tells the author instead of building something different. |
+| D-23 | Catmull-Rom phantom end points are extrapolated quadratically (`P₋₁ = 3P₀ − 3P₁ + P₂`; linearly `2P₀ − P₁` for 2 waypoints), not duplicated | Duplicated end points (first design) | Duplicates force the end tangent onto the chord to the next waypoint: 3 waypoints on a quarter circle then turn only 45°, and an L-shaped corner sags and turns up to 30° between neighbours. The quadratic phantom follows the parabola through the end waypoints, so arc-like waypoints give a smooth ~90° turn (A4). The curve still passes through every waypoint. `domino_chain` builds no dominoes from unusable arguments (each would repeat the same issue); the chain's `validate()` reports them once. |

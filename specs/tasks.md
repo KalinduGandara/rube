@@ -42,7 +42,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 
 ## M2 — Pipeline [opus]
 
-- [ ] T-009: `analysis.py` (tracks → entity records, events, UNSTABLE).
+- [x] T-009: `analysis.py` (tracks → entity records, events, UNSTABLE).
   - Requirements: FR-023
   - Done when: `test_analysis.py` covers first motion thresholds, fell_over, left_bounds, at_rest, event sorting, UNSTABLE (speed and jump).
 - [ ] T-010: `blender/scene.py`, `physics.py`, `build.py`, `simulate.py` (overlap, bake, sample), `bootstrap.py`; `cli.py run` (subprocess, process group, timeout, exit codes, blender.log, missing-report fallback).

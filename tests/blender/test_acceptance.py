@@ -3,7 +3,7 @@
 Each test runs ``python -m rube.cli run <script> --out <tmp>`` (Blender found via
 ``RUBE_BLENDER`` or the default path, see ``conftest.py``) and asserts on ``report.json``.
 Milestone M2 covers A1, A8, A11 and determinism (A1 twice, NFR-004); M3 adds A2-A5 and A9
-(A5 twice); later milestones add the other scenarios here.
+(A5 twice); M4 adds A10, A12; M5 adds A6; later milestones add the other scenarios here.
 """
 
 import json
@@ -17,7 +17,9 @@ from pathlib import Path
 
 import pytest
 
+from rube.generators import SpiralRamp
 from rube.report import still_frames
+from rube.script import load_machine
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES = ROOT / "examples"
@@ -260,3 +262,31 @@ def test_a12_follow_camera_video(tmp_path, blender_exe):
     )  # fmt: skip
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stdout.count(": x=") == len(frames)
+
+
+def test_a6_ball_through_spiral(tmp_path, blender_exe):
+    """A6 / FR-009, FR-010: a ball spawned with spiral.ball_spawn(r) runs down a 2-turn
+    spiral_ramp: it passes within 0.3 m of spiral.exit and never leaves the bounds."""
+    script = EXAMPLES / "a6_spiral.py"
+    code, report, output = rube_run(script, tmp_path, blender_exe)
+    assert code == 0, output
+    assert report["status"] == "ok", report
+    assert "UNSTABLE" not in {i["code"] for i in report["issues"]}
+    ball = entity(report, "Ball_1")
+    assert ball["left_bounds"] is False
+    assert not any(e["event"] == "left_bounds" for e in report["events"])
+    # spiral.exit from the same script, evaluated in system Python (pure Layer 1).
+    machine, issues = load_machine(script)
+    assert issues == []
+    (spiral,) = [g for g in machine.groups if isinstance(g, SpiralRamp)]
+    exit_point = spiral.exit
+    proc = subprocess.run(
+        [str(blender_exe), "-b", str(tmp_path / "machine.blend"), "--python",
+         str(ROOT / "tests" / "blender" / "check_trajectory.py"), "--",
+         "--object", "Ball_1", "--point", *map(str, exit_point)],
+        capture_output=True, text=True, timeout=120,
+    )  # fmt: skip
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    line = next(ln for ln in proc.stdout.splitlines() if ln.startswith("min_distance="))
+    min_distance = float(line.split()[0].split("=")[1])
+    assert min_distance < 0.3, line

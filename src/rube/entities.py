@@ -18,12 +18,13 @@ Placement conventions (SPEC section 2): ``Ball.center`` is the sphere center; ``
 ``start``/``end`` are the top-surface centerline endpoints (``start`` high). Angles are
 degrees; ``facing_deg`` is yaw about +Z with 0 = +X.
 
-Later milestones add the internal ``SpiralTrack`` / ``SupportColumn`` /
+Internal entities built by generators: ``SpiralTrack`` (the helix U-channel) and
+``SupportColumn`` (its center post), both created by ``spiral_ramp``. A later milestone adds
 ``LeverPlank`` / ``Fulcrum`` and the ``Lever`` group here; concrete ``Entity`` subclasses
 register themselves in ``ENTITY_TYPES`` automatically, so ``entity_from_dict`` needs no edits.
 
 Implements: FR-004, FR-005, FR-006, FR-007, FR-008 (Ramp plank), FR-009 (Ramp rails),
-FR-013 (entity-level checks), FR-020
+FR-010 (spiral track + support column bodies), FR-013 (entity-level checks), FR-020
 (BodySpec / HingeSpec), FR-012 structure (Hinge, Group).
 """
 
@@ -40,6 +41,7 @@ from rube.geometry import (
     aabb,
     box_mesh,
     channel_mesh,
+    cylinder_mesh,
     recenter,
     transform_points,
     uv_sphere_mesh,
@@ -68,6 +70,10 @@ MAX_NAME_BYTES = 63
 #: Wall height (m) above the floor of a ``Ramp(rails=True)`` channel (same as the
 #: ``spiral_ramp`` default ``wall_height``; SPEC gives no value, design D-24).
 RAIL_HEIGHT = 0.08
+#: Helix segments per turn of a spiral track (SPEC 6.2 asks for >= 48; more = smoother roll).
+SPIRAL_SEGMENTS_PER_TURN = 64
+#: Gap (m) between a spiral's support column and the inner edge of its groove (SPEC 6.2).
+COLUMN_GAP = 0.01
 
 #: Named preview colors (linear RGBA for Workbench object color).
 COLORS: dict[str, tuple[float, float, float, float]] = {
@@ -125,6 +131,8 @@ DEFAULTS: dict[str, PhysicsDefaults] = {
     "Domino": PhysicsDefaults(True, None, 600.0, 0.5, 0.0, 0.04, 0.1, 0.001, "yellow"),
     "Ramp": PhysicsDefaults(False, 1.0, None, 0.3, 0.0, 0.04, 0.1, 0.001, "wood"),
     "RampRails": PhysicsDefaults(False, 1.0, None, 0.3, 0.0, 0.04, 0.1, 0.005, "wood"),
+    "SpiralTrack": PhysicsDefaults(False, 1.0, None, 0.3, 0.0, 0.04, 0.1, 0.005, "wood"),
+    "SupportColumn": PhysicsDefaults(False, 1.0, None, 0.5, 0.0, 0.04, 0.1, 0.001, "gray"),
 }
 
 
@@ -977,6 +985,176 @@ class Ramp(Entity):
 def _horizontal(v: Vec3) -> Vec3:
     """``v`` projected onto the XY plane."""
     return Vec3(v.x, v.y, 0.0)
+
+
+@dataclass(eq=False)
+class SpiralTrack(Entity):
+    """Helix U-channel of a ``spiral_ramp`` (internal; passive, collision ``MESH``).
+
+    Authors use ``spiral_ramp(...)``, which validates the slope and creates this track plus a
+    ``SupportColumn``. The floor's top-surface centerline is a helix of ``radius`` around the
+    vertical axis through ``center``; it starts at angle 0 (the +X side of the axis) at
+    ``center.z + height`` and descends linearly to ``center.z + thickness`` (so the channel's
+    underside ends on the ground) after ``turns`` turns, counter-clockwise seen from above
+    unless ``clockwise``. Cross-section: ``geometry.channel_mesh`` with groove width
+    ``track_width``, walls ``wall_height`` high, floor and walls ``thickness`` thick. Sampled
+    with ``SPIRAL_SEGMENTS_PER_TURN`` segments per turn.
+
+    Args:
+        center: Ground point under the spiral axis (x, y, z), meters.
+        radius: Helix radius of the groove centerline, meters.
+        height: Height of the entry's floor top above ``center.z``, meters.
+        turns: Number of turns (> 0, may be fractional).
+        track_width: Inner groove width, meters.
+        wall_height: Wall height above the floor top, meters.
+        thickness: Floor/wall thickness, meters.
+        clockwise: Descend clockwise seen from above.
+    """
+
+    center: Vec3
+    radius: float
+    height: float
+    turns: float
+    track_width: float = 0.25
+    wall_height: float = 0.08
+    thickness: float = 0.03
+    clockwise: bool = False
+
+    COLLISION_SHAPE: ClassVar[str] = "MESH"
+
+    def __post_init__(self) -> None:
+        self.center = coerce_vec(self.center)
+
+    def argument_issues(self, who: str) -> list[Issue]:
+        """Problems that make the helix impossible to build, reported under ``who``.
+
+        Shared with ``SpiralRamp`` so the group can report them under its own name.
+        """
+        issues: list[Issue] = []
+        check_vec(issues, who, "center", self.center)
+        check_dimension(issues, who, "track_width", self.track_width, 0.25)
+        check_dimension(issues, who, "wall_height", self.wall_height, 0.08)
+        check_dimension(issues, who, "thickness", self.thickness, 0.03)
+        check_number(
+            issues, who, "turns", self.turns, lo=0.0, lo_open=True,
+            hint="use a positive number of turns, e.g. turns=2",
+        )  # fmt: skip
+        if not isinstance(self.clockwise, bool):
+            issues.append(
+                error(
+                    "INVALID_ARGUMENT",
+                    who,
+                    f"clockwise must be True or False, got {self.clockwise!r}",
+                    "use clockwise=False (counter-clockwise seen from above) or True",
+                )
+            )
+        widths_ok = not has_errors(issues)
+        if widths_ok:
+            # The inner wall and the support column (radius - track_width/2 - COLUMN_GAP)
+            # must both fit inside the helix.
+            min_radius = self.track_width / 2 + self.thickness + MIN_DIMENSION
+            check_number(
+                issues, who, "radius", self.radius, lo=min_radius, unit=" m",
+                hint=f"use radius >= {min_radius:.3g} m (track_width / 2 + thickness + "
+                f"{MIN_DIMENSION:g} m) so the inner wall and the support column fit",
+            )  # fmt: skip
+            check_number(
+                issues, who, "height", self.height, lo=self.thickness, lo_open=True,
+                unit=" m", hint="use a height of about 0.3-0.8 m per turn, e.g. height=1.5",
+            )  # fmt: skip
+        return issues
+
+    def _geometry_issues(self) -> list[Issue]:
+        return self.argument_issues(self.label)
+
+    # -- helix --------------------------------------------------------------------------
+
+    @property
+    def segments(self) -> int:
+        """Number of helix segments (``SPIRAL_SEGMENTS_PER_TURN`` per turn, rounded up)."""
+        return max(1, math.ceil(SPIRAL_SEGMENTS_PER_TURN * self.turns - 1e-9))
+
+    def _sweep(self) -> float:
+        """Signed total angle in radians (negative when clockwise)."""
+        return (-1.0 if self.clockwise else 1.0) * 2 * math.pi * self.turns
+
+    def _drop(self) -> float:
+        """Vertical descent of the floor top from entry to exit, meters."""
+        return self.height - self.thickness
+
+    def point_at(self, f: float) -> Vec3:
+        """Floor top-surface centerline point at fraction ``f`` (0 = entry, 1 = exit)."""
+        a = self._sweep() * f
+        return self.center + Vec3(
+            self.radius * math.cos(a), self.radius * math.sin(a), self.height - self._drop() * f
+        )
+
+    def frame_at(self, f: float) -> tuple[Vec3, Vec3, Vec3]:
+        """Exact ``(tangent, side, up)`` at fraction ``f``, same convention as
+        ``geometry.path_frames`` (side horizontal, up = surface normal)."""
+        a, w = self._sweep() * f, self._sweep()
+        tangent = Vec3(
+            -self.radius * math.sin(a) * w, self.radius * math.cos(a) * w, -self._drop()
+        ).normalized()
+        side = Vec3(-tangent.y, tangent.x, 0.0).normalized()
+        return tangent, side, tangent.cross(side)
+
+    @property
+    def length(self) -> float:
+        """Arc length of the helix centerline, meters."""
+        return math.hypot(self._sweep() * self.radius, self._drop())
+
+    def centerline(self) -> list[Vec3]:
+        """The sampled helix (``segments + 1`` points, entry to exit)."""
+        n = self.segments
+        return [self.point_at(k / n) for k in range(n + 1)]
+
+    def _channel(self) -> tuple[MeshSpec, Vec3]:
+        mesh = channel_mesh(self.centerline(), self.track_width, self.wall_height, self.thickness)
+        return recenter(mesh)
+
+    def _pose(self) -> tuple[Vec3, Mat3]:
+        # Generated in world axes: the origin moves to the center of volume, no rotation.
+        return self._channel()[1], IDENTITY
+
+    def _mesh(self) -> MeshSpec:
+        return self._channel()[0]
+
+
+@dataclass(eq=False)
+class SupportColumn(Entity):
+    """Vertical cylinder standing on ``center`` (internal; passive, convex hull shape).
+
+    The center post of a ``spiral_ramp``: it makes the spiral look and behave like a
+    structure. The ball never touches it (it stays ``COLUMN_GAP`` inside the groove).
+
+    Args:
+        center: Bottom-center point (x, y, z) on the ground, meters.
+        radius: Cylinder radius, meters.
+        height: Cylinder height, meters.
+    """
+
+    center: Vec3
+    radius: float
+    height: float
+
+    COLLISION_SHAPE: ClassVar[str] = "CONVEX_HULL"
+
+    def __post_init__(self) -> None:
+        self.center = coerce_vec(self.center)
+
+    def _geometry_issues(self) -> list[Issue]:
+        issues: list[Issue] = []
+        check_vec(issues, self.label, "center", self.center)
+        check_dimension(issues, self.label, "radius", self.radius, 0.3)
+        check_dimension(issues, self.label, "height", self.height, 1.5)
+        return issues
+
+    def _pose(self) -> tuple[Vec3, Mat3]:
+        return self.center + Vec3(0.0, 0.0, self.height / 2), IDENTITY
+
+    def _mesh(self) -> MeshSpec:
+        return cylinder_mesh(self.radius, self.height)
 
 
 # --- groups and constraints -------------------------------------------------------------

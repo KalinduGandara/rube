@@ -72,7 +72,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 - [x] T-015: `geometry.channel_mesh`; `Ramp(rails=True)` (MESH, margin 0.005).
   - Requirements: FR-009
   - Done when: channel mesh closed/manifold unit test; rails ramp unit test.
-- [ ] T-016: `generators.spiral_ramp` (helix channel, support column, anchors, slope + track validation); example + A6.
+- [x] T-016: `generators.spiral_ramp` (helix channel, support column, anchors, slope + track validation); example + A6.
   - Requirements: FR-010
   - Done when: slope/entry/exit unit tests; A6 passes.
 

@@ -9,7 +9,10 @@ issues in one run (FR-013, design D-15).
 ``domino_chain`` (SPEC section 6.1): dominoes along a Catmull-Rom spline through flat
 waypoints, at equal **arc length**, each facing the path tangent.
 
-Implements: FR-011.
+``spiral_ramp`` (SPEC section 6.2): a helix U-channel (``SpiralTrack``) around a passive
+``SupportColumn``, with slope and track-width checks.
+
+Implements: FR-010, FR-011.
 """
 
 from __future__ import annotations
@@ -18,9 +21,13 @@ import math
 from typing import Any
 
 from rube.entities import (
+    CLEARANCE,
     COLORS,
+    COLUMN_GAP,
     Domino,
     Group,
+    SpiralTrack,
+    SupportColumn,
     check_number,
     check_size3,
     coerce_size,
@@ -349,3 +356,184 @@ def domino_chain(
         ``validate()``, never raised.
     """
     return DominoChain(points, spacing, count, size, tilt_first_deg, color)
+
+
+# --- spiral ramp ----------------------------------------------------------------------------
+
+#: Allowed spiral slope (height / horizontal helix length) in degrees: shallower and the ball
+#: stops, steeper and it skips over the walls (SPEC 6.2).
+SPIRAL_SLOPE_RANGE_DEG = (4.0, 25.0)
+#: ``ball_spawn(r)`` requires ``track_width >= 2.5 r`` and ``wall_height >= 0.6 r``.
+TRACK_WIDTH_PER_RADIUS = 2.5
+WALL_HEIGHT_PER_RADIUS = 0.6
+
+
+class SpiralRamp(Group):
+    """Helix U-channel around a central support column; returned by ``spiral_ramp``.
+
+    Members: ``SpiralTrack`` then ``SupportColumn`` (both passive), or none when the
+    arguments are unusable (``validate()`` then reports them once, under the group name).
+
+    Anchors:
+        entry: Top-surface centerline point where the track starts (high end).
+        exit: Top-surface centerline point where the track ends (``thickness`` above ground).
+        ball_spawn(radius): Center for a ball resting in the groove just after the entry.
+    """
+
+    def __init__(
+        self,
+        center: Any,
+        radius: Any,
+        height: Any,
+        turns: Any,
+        track_width: Any = 0.25,
+        wall_height: Any = 0.08,
+        thickness: Any = 0.03,
+        clockwise: Any = False,
+    ):
+        self.track = SpiralTrack(
+            center, radius, height, turns,
+            track_width=track_width, wall_height=wall_height, thickness=thickness,
+            clockwise=clockwise,
+        )  # fmt: skip
+        #: Radii passed to ``ball_spawn``; checked against the track size by ``validate()``.
+        self.spawn_radii: list[float] = []
+        members = []
+        if not has_errors(self.track.argument_issues(self.type_name())):
+            t = self.track
+            column = SupportColumn(t.center, t.radius - t.track_width / 2 - COLUMN_GAP, t.height)
+            members = [t, column]
+        super().__init__(members)
+
+    @property
+    def label(self) -> str:
+        """Name for messages: the group name, or ``"SpiralRamp"`` before it is named."""
+        return self.name if isinstance(self.name, str) and self.name else self.type_name()
+
+    # -- anchors -------------------------------------------------------------------------
+
+    def _require_members(self) -> None:
+        if not self.members:
+            raise RubeValidationError(self.track.argument_issues(self.label))
+
+    @property
+    def entry(self) -> Vec3:
+        """High end of the floor's top-surface centerline (``center.z + height``)."""
+        self._require_members()
+        return self.track.point_at(0.0)
+
+    @property
+    def exit(self) -> Vec3:
+        """Low end of the floor's top-surface centerline (``center.z + thickness``)."""
+        self._require_members()
+        return self.track.point_at(1.0)
+
+    def ball_spawn(self, radius: float = 0.1) -> Vec3:
+        """Center for a ball of ``radius`` m that starts rolling from the top of the spiral.
+
+        The center is ``1.5 * radius`` along the track from the entry and ``radius +
+        CLEARANCE`` above the floor along its normal (same rule as ``Ramp.ball_spawn``).
+        Using it also enables the ``TRACK_TOO_NARROW`` check for this radius.
+
+        Raises:
+            RubeValidationError: unusable spiral arguments or a non-positive ``radius``.
+        """
+        self._require_members()
+        issues: list[Issue] = []
+        check_number(
+            issues, self.label, "ball_spawn radius", radius, lo=0.0, lo_open=True, unit=" m",
+            hint="pass the ball's radius, e.g. spiral.ball_spawn(0.08)",
+        )  # fmt: skip
+        if issues:
+            raise RubeValidationError(issues)
+        self.spawn_radii.append(float(radius))
+        f = 1.5 * radius / self.track.length
+        _, _, up = self.track.frame_at(f)
+        return self.track.point_at(f) + up * (radius + CLEARANCE)
+
+    # -- validation ----------------------------------------------------------------------
+
+    def validate(self) -> list[Issue]:
+        """Arguments, SLOPE_TOO_SHALLOW / SLOPE_TOO_STEEP, TRACK_TOO_NARROW (after ball_spawn)."""
+        who = self.label
+        if not self.members:
+            return self.track.argument_issues(who)
+        t = self.track
+        issues: list[Issue] = []
+        # SPEC 6.2 slope: height over the horizontal length of the helix.
+        run = 2 * math.pi * t.radius * t.turns
+        slope = t.height / run
+        lo_deg, hi_deg = SPIRAL_SLOPE_RANGE_DEG
+        lo, hi = math.tan(math.radians(lo_deg)), math.tan(math.radians(hi_deg))
+        if not lo <= slope <= hi:
+            code = "SLOPE_TOO_SHALLOW" if slope < lo else "SLOPE_TOO_STEEP"
+            turns_lo, turns_hi = (
+                t.height / (hi * 2 * math.pi * t.radius),
+                t.height / (lo * 2 * math.pi * t.radius),
+            )
+            issues.append(
+                error(
+                    code,
+                    who,
+                    f"slope is {math.degrees(math.atan(slope)):.1f} deg (height {t.height:g} m "
+                    f"over {run:.2f} m of helix); it must be {lo_deg:g}-{hi_deg:g} deg "
+                    + ("or the ball stops" if slope < lo else "or the ball skips over the walls"),
+                    f"use height between {lo * run:.2f} and {hi * run:.2f} m, or turns between "
+                    f"{turns_lo:.2f} and {turns_hi:.2f} for this height and radius",
+                )
+            )
+        if self.spawn_radii:
+            r = max(self.spawn_radii)
+            need_w, need_h = TRACK_WIDTH_PER_RADIUS * r, WALL_HEIGHT_PER_RADIUS * r
+            if t.track_width < need_w - 1e-9 or t.wall_height < need_h - 1e-9:
+                max_r = min(t.track_width / TRACK_WIDTH_PER_RADIUS,
+                            t.wall_height / WALL_HEIGHT_PER_RADIUS)  # fmt: skip
+                issues.append(
+                    error(
+                        "TRACK_TOO_NARROW",
+                        who,
+                        f"a ball of radius {r:g} m needs track_width >= {need_w:g} m and "
+                        f"wall_height >= {need_h:g} m; the track has {t.track_width:g} m and "
+                        f"{t.wall_height:g} m",
+                        f"use track_width >= {need_w:g} and wall_height >= {need_h:g}, or a "
+                        f"ball radius <= {max_r:.3g} m",
+                    )
+                )
+        return issues
+
+
+def spiral_ramp(
+    center: Any,
+    radius: float,
+    height: float,
+    turns: float,
+    *,
+    track_width: float = 0.25,
+    wall_height: float = 0.08,
+    thickness: float = 0.03,
+    clockwise: bool = False,
+) -> SpiralRamp:
+    """A spiral U-channel for a ball to roll down, around a support column; add it to a machine.
+
+    The groove's floor (top-surface centerline) is a helix of ``radius`` around the vertical
+    axis through ``center``. It starts on the +X side of the axis at ``center.z + height``
+    and descends evenly to ``center.z + thickness`` (the channel bottom ends on the ground),
+    counter-clockwise seen from above unless ``clockwise``. Passive, collision ``MESH``.
+
+    Args:
+        center: Ground point (x, y, z) under the spiral axis, meters.
+        radius: Helix radius of the groove centerline, meters (>= track_width/2 + thickness +
+            0.02 so the inner wall and the column fit).
+        height: Entry height above ``center.z``, meters.
+        turns: Number of turns (> 0). Slope = height / (2 pi radius turns) must be 4-25 deg.
+        track_width: Inner groove width, meters (>= 2.5 x ball radius).
+        wall_height: Wall height above the groove floor, meters (>= 0.6 x ball radius).
+        thickness: Floor and wall thickness, meters.
+        clockwise: Turn clockwise seen from above.
+
+    Returns:
+        A ``SpiralRamp`` group (``.entry``, ``.exit``, ``.ball_spawn(r)``). Problems
+        (``SLOPE_TOO_SHALLOW``, ``SLOPE_TOO_STEEP``, ``TRACK_TOO_NARROW``, ...) are reported by
+        ``validate()``, never raised.
+    """
+    return SpiralRamp(center, radius, height, turns, track_width, wall_height, thickness, clockwise)

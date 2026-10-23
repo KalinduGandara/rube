@@ -27,7 +27,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 - [x] T-004: `geometry.py` primitives: `MeshSpec`, `box_mesh`, `uv_sphere_mesh(32,16)`, `cylinder_mesh`, `prism_mesh`, AABB helpers.
   - Requirements: FR-005, FR-006, FR-020
   - Done when: `test_geometry.py` checks vertex counts, bounds = true size, centroid at origin, closed (every edge shared by 2 faces).
-- [ ] T-005: `entities.py`: PhysicsProps, `DEFAULTS`, `COLORS`, Entity, Floor, Ball, Block, Domino (tilt, deactivation), anchors, `validate()`, `body()` → BodySpec.
+- [x] T-005: `entities.py`: PhysicsProps, `DEFAULTS`, `COLORS`, Entity, Floor, Ball, Block, Domino (tilt, deactivation), anchors, `validate()`, `body()` → BodySpec.
   - Requirements: FR-004–FR-007, FR-013
   - Done when: `test_entities.py` covers defaults, density mass, anchors, tilt keeps front edge on ground, deactivation flags, OUT_OF_RANGE / INVALID_ARGUMENT / TOO_SMALL.
 - [ ] T-006: `machine.py`: registry, groups, auto names, auto floor, `validate()` (NAME_DUPLICATE, OUT_OF_RANGE duration, TOO_MANY_BODIES, OUTSIDE_FLOOR, MASS_RATIO), `bodies()`/`constraints()`.

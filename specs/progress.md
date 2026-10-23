@@ -25,6 +25,7 @@ Append one line per completed task: `YYYY-MM-DD T-NNN <summary> — <tests> — 
 - 2026-10-24 T-019 review finding 1: OVERLAP now also probes the AABB-intersection centre and both origins for strict containment in both shapes (D-27); coplanar blocks/dominoes repros added as Blender tests; A1-A12 still pass.
 - 2026-10-24 T-019 review finding 3: import guard allows only public rube modules, rejects FORBIDDEN_NAMES / dunder and frame attributes, execs with curated builtins and public views of rube/random (D-28); reviewer's four bypasses + runtime cases tested; all examples and doc scripts pass rube check.
 - 2026-10-24 T-019 review finding 2 and 4: author scripts stop after a fixed 30 s (SIGALRM + line-trace escalation, SCRIPT_ERROR, report written); BaseException from the script is SCRIPT_ERROR, real Ctrl-C propagates and rube run still writes an internal_error "interrupted" report (D-29).
+- 2026-10-24 T-019 review finding 7 and 9: rube run removes stale known artifacts (frames/, video.mp4, machine.blend, spec.json, blender.log, report.json; nothing else) at start; --timeout must be a finite number > 0 (D-30).
 
 ## Physics default changes (assumption A-1)
 

@@ -293,3 +293,59 @@ def test_interrupt_still_writes_report(tmp_path, fake_blender, monkeypatch, targ
         run(tmp_path)
     report = read_report(tmp_path / "out" / "report.json")
     assert report["status"] == "internal_error" and "interrupted" in report["traceback"]
+
+
+#: Artifacts a run produces (FR-018/FR-024); stale copies must not survive a re-run.
+KNOWN_ARTIFACTS = ("spec.json", "blender.log", "report.json", "video.mp4", "machine.blend")
+
+
+def test_rerun_removes_stale_artifacts_only(tmp_path, fake_blender):
+    """FR-018 (T-019 review finding 7): a re-run deletes the known artifacts of an earlier
+    run (frames/ included) and nothing else in the output directory."""
+    argv_file = fake_blender("ok")
+    out = tmp_path / "out"
+    (out / "frames").mkdir(parents=True)
+    (out / "frames" / "f_0001.png").write_bytes(b"old")
+    for name in KNOWN_ARTIFACTS:
+        (out / name).write_text("old")
+    (out / "notes.txt").write_text("mine")
+    (out / "mine").mkdir()
+    (out / "mine" / "frames").mkdir()
+    write_script(tmp_path, "from rube import Machine\nmachine = Machine(duration=99)\n")
+    code, _ = run(tmp_path)
+    assert code == 2 and not argv_file.exists()
+    left = sorted(p.relative_to(out).as_posix() for p in out.rglob("*"))
+    assert left == ["mine", "mine/frames", "notes.txt", "report.json"]
+    assert read_report(out / "report.json")["status"] == "invalid"
+
+
+def test_rerun_unlinks_frames_symlink_without_following_it(tmp_path, fake_blender):
+    """FR-018: a `frames` symlink is removed as a link; the directory it points to is kept."""
+    fake_blender("ok")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep.png").write_bytes(b"keep")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "frames").symlink_to(elsewhere, target_is_directory=True)
+    write_script(tmp_path, "from rube import Machine\nmachine = Machine(duration=99)\n")
+    run(tmp_path)
+    assert not (out / "frames").exists() and not (out / "frames").is_symlink()
+    assert (elsewhere / "keep.png").read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "-inf", "abc", ""])
+def test_timeout_must_be_finite_and_positive(tmp_path, fake_blender, value, capsys):
+    """FR-018 (T-019 review finding 9): --timeout must be a finite number > 0 (usage error)."""
+    argv_file = fake_blender("ok")
+    write_script(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        run(tmp_path, "--timeout", value)
+    assert exc.value.code == 2 and "--timeout" in capsys.readouterr().err
+    assert not argv_file.exists() and not (tmp_path / "out").exists()
+
+
+def test_timeout_accepts_fractional_seconds():
+    """FR-018: a positive fraction is a valid --timeout."""
+    args = cli.build_parser().parse_args(["run", "m.py", "--out", "o", "--timeout", "0.5"])
+    assert args.timeout == 0.5

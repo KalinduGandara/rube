@@ -7,7 +7,8 @@ and prints every issue, one per line. Exit code 0 when there are no errors (warn
 fine), 2 when there are errors, 1 on a framework bug (traceback on stderr). Blender is never
 started.
 
-``rube run machine.py --out DIR [--video] [--timeout 300]`` validates the same way; an invalid
+``rube run machine.py --out DIR [--video] [--timeout 300]`` first deletes the artifacts of an
+earlier run in ``DIR`` (``STALE_ARTIFACTS``, nothing else), then validates the same way; an invalid
 machine gets ``DIR/report.json`` with status ``invalid`` and exit 2 without starting Blender.
 Otherwise it writes ``DIR/spec.json`` (``Machine.to_dict()``, design D-1: Blender only ever
 sees data) and runs ``Blender -b --factory-startup --python-exit-code 1 --python
@@ -24,7 +25,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -43,6 +46,15 @@ DEFAULT_BLENDER = "/Applications/Blender.app/Contents/MacOS/Blender"
 BOOTSTRAP = Path(__file__).resolve().parent / "blender" / "bootstrap.py"
 #: Default ``--timeout`` in seconds.
 DEFAULT_TIMEOUT = 300.0
+#: Every path a run writes into ``--out`` (FR-018, FR-024); removed at the start of a run.
+STALE_ARTIFACTS = (
+    "report.json",
+    "spec.json",
+    "blender.log",
+    "machine.blend",
+    "video.mp4",
+    "frames",
+)
 #: Lines of ``blender.log`` quoted in an ``internal_error`` report.
 LOG_TAIL_LINES = 40
 
@@ -105,6 +117,20 @@ def _kill_group(proc: subprocess.Popen) -> None:
     proc.wait()
 
 
+def remove_stale_artifacts(out_dir: Path) -> None:
+    """Delete the artifacts of an earlier run in ``out_dir`` (``STALE_ARTIFACTS`` only).
+
+    Anything else in the directory is the author's and is left alone. Symlinks are removed as
+    links, never followed: ``rmtree`` runs only on a real ``frames`` directory.
+    """
+    for name in STALE_ARTIFACTS:
+        path = out_dir / name
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+
+
 def _finish(out_dir: Path, report: dict, start: float) -> int:
     """Stamp the CLI wall time (design D-20), write the report, print a summary, return the code."""
     report["elapsed_s"] = round(time.monotonic() - start, 3)
@@ -156,8 +182,8 @@ def cmd_run(path: str, out: str, video: bool = False, timeout: float = DEFAULT_T
     out_dir = Path(out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path = out_dir / "report.json"
-    # A report left by an earlier run must never be read as this run's result (design D-20).
-    report_path.unlink(missing_ok=True)
+    # Artifacts left by an earlier run must never pass for this run's (design D-20, D-30).
+    remove_stale_artifacts(out_dir)
     try:
         machine, issues = check_script(path)
         # No timing block when there is no machine or its duration is not even a number.
@@ -213,6 +239,21 @@ def cmd_run(path: str, out: str, video: bool = False, timeout: float = DEFAULT_T
         raise
 
 
+def positive_seconds(text: str) -> float:
+    """``argparse`` type for ``--timeout``: a finite number of seconds > 0.
+
+    Why: ``0`` or a negative value would time out Blender at once and ``nan`` crashes the wait,
+    both reported as if the machine were at fault.
+    """
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number of seconds") from None
+    if not (math.isfinite(value) and value > 0):
+        raise argparse.ArgumentTypeError(f"{text!r} must be a finite number of seconds > 0")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser for the ``rube`` command."""
     parser = argparse.ArgumentParser(
@@ -228,7 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--video", action="store_true", help="also render video.mp4")
     run.add_argument(
         "--timeout",
-        type=float,
+        type=positive_seconds,
         default=DEFAULT_TIMEOUT,
         help=f"seconds before Blender is killed (default {DEFAULT_TIMEOUT:g})",
     )

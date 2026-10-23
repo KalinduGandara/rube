@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rube"
+version = "0.1.0"
+description = "Declarative Rube Goldberg machines simulated in Blender (see SPEC.md)."
+requires-python = ">=3.11"
+# Runtime is stdlib only (NFR-002). Blender-side code uses Blender's bundled Python.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+rube = "rube.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "blender: runs the real Blender binary (slow; skipped when Blender is not found)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Lint and format Python only; Markdown docs (SPEC, specs/) are prose with illustrative code.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

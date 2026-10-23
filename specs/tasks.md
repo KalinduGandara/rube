@@ -84,7 +84,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 
 ## M7 — Docs [sonnet]
 
-- [ ] T-018: `docs/API_FOR_LLM.md` (< 300 lines, final defaults), `README.md`, examples tidy.
+- [x] T-018: `docs/API_FOR_LLM.md` (< 300 lines, final defaults), `README.md`, examples tidy.
   - Requirements: FR-027
   - Done when: doc line count < 300; every example script passes `rube check`.
 

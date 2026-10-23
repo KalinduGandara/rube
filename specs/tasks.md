@@ -45,7 +45,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 - [x] T-009: `analysis.py` (tracks → entity records, events, UNSTABLE).
   - Requirements: FR-023
   - Done when: `test_analysis.py` covers first motion thresholds, fell_over, left_bounds, at_rest, event sorting, UNSTABLE (speed and jump).
-- [ ] T-010: `blender/scene.py`, `physics.py`, `build.py`, `simulate.py` (overlap, bake, sample), `bootstrap.py`; `cli.py run` (subprocess, process group, timeout, exit codes, blender.log, missing-report fallback).
+- [x] T-010: `blender/scene.py`, `physics.py`, `build.py`, `simulate.py` (overlap, bake, sample), `bootstrap.py`; `cli.py run` (subprocess, process group, timeout, exit codes, blender.log, missing-report fallback).
   - Requirements: FR-018–FR-023, FR-025, NFR-004
   - Done when: `test_cli_run.py` (fake Blender script: ok / timeout / no report) passes; acceptance A1, A8, A11 pass; A1 run twice gives identical final positions.
 

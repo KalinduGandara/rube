@@ -162,9 +162,10 @@ Exactly SPEC §9.2. Status → exit code: `ok 0, invalid 2, bake_failed 3, timeo
   vector, up normal); emit the U cross-section (8 points: outer/inner of floor + two walls)
   and stitch consecutive sections into quads; cap both ends. Solid (closed) so Bullet `MESH`
   shape and BVH overlap work.
-- **Overlap (FR-021)**: world-space AABB intersection prefilter, then
-  `BVHTree.FromObject(obj, depsgraph).overlap(other)`; pairs joined by a `disable_collisions`
-  hinge are skipped.
+- **Overlap (FR-021)**: world-space AABB intersection prefilter, then a BVH overlap test on
+  trees built with `BVHTree.FromPolygons` from **world-space** vertices (D-19), plus a
+  containment test (one body entirely inside the other); pairs joined by a
+  `disable_collisions` hinge and passive–passive pairs are skipped (D-18).
 - **Analysis (FR-023)**: speed = |Δposition| · fps between consecutive frames; rotation
   change = angle of `R₀ᵀ·R_f`; tilt = angle between `R_f·ẑ` and `ẑ`.
 - **Auto camera (FR-014)**: bounding box of non-floor bodies; look at its center from the
@@ -213,3 +214,7 @@ Commands: `pytest tests/unit`, `pytest -m blender tests/blender`, `ruff check . 
 | D-15 | Entity constructors store arguments as given, coercing positions to `Vec3` / sizes to float tuples only when coercible; anything else is reported by `validate()` (`INVALID_ARGUMENT`). Anchors need valid geometry and raise `RubeValidationError` otherwise. Physics/color problems never block anchors. | Raise in `__init__` | All problems reported in one pass (§7); an anchor on a mis-typed color should not abort the script. |
 | D-16 | `Block(size=...)` defaults to `(0.2, 0.2, 0.2)`; default preview colors per type live in `DEFAULTS` (Floor gray, Ball red, Block blue, Domino yellow); `TOO_SMALL` for a ball uses its diameter; `tilt_deg` must be in [0, 90). | Required `size` | SPEC gives no value; forgiving API (§0). |
 | D-17 | Entity/Group auto names `<Type>_<n>` come from one per-type counter in registration order, skipping names already taken; group members are named by their own type; hinges `Hinge_<n>`. Names must be non-empty and ≤ 63 bytes (Blender's limit) or `INVALID_ARGUMENT`. | Group-prefixed member names | One rule, predictable for the author; FR-002 "Blender object gets exactly this name". |
+| D-18 | The overlap check skips pairs of two passive bodies | Check every pair | Passive bodies never move, so their contact cannot start an explosion; a ramp end or support column resting on the floor would otherwise be a false `OVERLAP`. |
+| D-19 | Overlap BVH trees are built with `BVHTree.FromPolygons` from world-space vertices (`matrix_world @ v.co`), and a body fully inside another is caught by a nearest-face inside test | `BVHTree.FromObject` | `FromObject` returns the tree in object-local space, so two trees of different objects cannot be compared directly; triangle overlap alone misses full containment. |
+| D-20 | `rube run` deletes a stale `report.json` before starting Blender, and overwrites the report's `elapsed_s` with the CLI's total wall time; `bootstrap` adds the machine's validation warnings to the report | Trust whatever file is there; Blender-only time | A leftover report must never be mistaken for a fresh one (missing-report fallback); authors care about end-to-end time; warnings found by `rube check` belong in the run report too. |
+| D-21 | Milestone M2 saves `machine.blend` (trivial `wm.save_as_mainfile`) but renders nothing (`frames: []`); `--video` is accepted and ignored until M4 | Leave `.blend` for M4 | The `.blend` is cheap and useful for inspecting failures now; rendering is M4 (T-014). |

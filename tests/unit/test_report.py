@@ -5,7 +5,15 @@ import json
 import pytest
 
 from rube.errors import error
-from rube.report import STATUS_EXIT, build_report, exit_code, read_report, timing, write_report
+from rube.report import (
+    STATUS_EXIT,
+    build_report,
+    exit_code,
+    read_report,
+    still_frames,
+    timing,
+    write_report,
+)
 
 KEYS = [
     "status", "issues", "timing", "entities", "events", "artifacts",
@@ -59,3 +67,17 @@ def test_write_and_read(tmp_path):
     rep = build_report("ok", timing=timing(1.0), blender_version="5.2.3")
     write_report(path, rep)
     assert read_report(path) == rep
+
+
+def test_still_frames_evenly_spaced_including_ends():
+    """FR-024: 6 stills evenly spaced, including the first and last frame."""
+    assert still_frames(1, 241) == [1, 49, 97, 145, 193, 241]
+    frames = still_frames(1, 98)
+    assert len(frames) == 6 and frames[0] == 1 and frames[-1] == 98
+    assert frames == sorted(set(frames))
+
+
+def test_still_frames_short_range_has_no_duplicates():
+    """FR-024: a range shorter than 6 frames yields each frame once."""
+    assert still_frames(1, 3) == [1, 2, 3]
+    assert still_frames(1, 1) == [1]

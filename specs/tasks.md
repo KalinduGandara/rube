@@ -63,7 +63,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 
 ## M4 — Rendering [sonnet]
 
-- [ ] T-014: `blender/render.py`: camera (static / follow constraints), Workbench 960×540, 6 stills, `--video` MP4, `.blend` save; report artifacts.
+- [x] T-014: `blender/render.py`: camera (static / follow constraints), Workbench 960×540, 6 stills, `--video` MP4, `.blend` save; report artifacts.
   - Requirements: FR-014, FR-024
   - Done when: A10 (< 60 s) and A12 (via `tests/blender/check_camera.py`) pass.
 

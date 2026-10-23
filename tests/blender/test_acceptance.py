@@ -8,12 +8,16 @@ Milestone M2 covers A1, A8, A11 and determinism (A1 twice, NFR-004); M3 adds A2-
 
 import json
 import os
+import struct
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
+
+from rube.report import still_frames
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES = ROOT / "examples"
@@ -21,12 +25,12 @@ EXAMPLES = ROOT / "examples"
 pytestmark = pytest.mark.blender
 
 
-def rube_run(script, out, blender_exe, timeout=300):
+def rube_run(script, out, blender_exe, timeout=300, extra=()):
     """Run ``rube run script --out out``; returns (exit code, report dict, combined output)."""
     env = {**os.environ, "RUBE_BLENDER": str(blender_exe)}
     proc = subprocess.run(
         [sys.executable, "-m", "rube.cli", "run", str(script), "--out", str(out),
-         "--timeout", str(timeout)],
+         "--timeout", str(timeout), *extra],
         capture_output=True, text=True, timeout=timeout + 60, env=env,
     )  # fmt: skip
     report = json.loads((Path(out) / "report.json").read_text())
@@ -205,3 +209,54 @@ def test_a9_ball_ramp_chain_determinism(tmp_path, blender_exe):
     assert len(finals[0]) >= 11  # the ball and every domino
     for name, first in finals[0].items():
         assert finals[1][name] == pytest.approx(first, abs=1e-6), name
+
+
+def test_a10_ramp_chain_with_stills_under_60s(tmp_path, blender_exe):
+    """A10 / NFR-005, FR-024: A5 with 6 stills takes < 60 s wall time; the 6 PNGs exist at
+    absolute-resolvable paths named f_XXXX.png, are 960x540, and machine.blend is saved."""
+    start = time.monotonic()
+    code, report, output = rube_run(EXAMPLES / "a5_ball_ramp_chain.py", tmp_path, blender_exe)
+    wall = time.monotonic() - start
+    assert code == 0, output
+    assert wall < 60, f"A5 with stills took {wall:.1f} s"
+    frames = report["artifacts"]["frames"]
+    assert len(frames) == 6
+    timing = report["timing"]
+    expected = [
+        f"frames/f_{n:04d}.png" for n in still_frames(timing["frame_start"], timing["frame_end"])
+    ]
+    assert frames == expected
+    assert expected[0].endswith("f_0001.png") and expected[-1].endswith(
+        f"f_{timing['frame_end']:04d}.png"
+    )
+    for rel in frames:
+        png = tmp_path / rel
+        assert png.is_file() and png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+        width, height = struct.unpack(">II", png.read_bytes()[16:24])
+        assert (width, height) == (960, 540)
+    assert report["artifacts"]["video"] is None
+    assert (tmp_path / "machine.blend").is_file()
+
+
+def test_a12_follow_camera_video(tmp_path, blender_exe):
+    """A12 / FR-014, FR-024: Camera.follow(ball) in A2 with --video -> video.mp4 (H.264) is
+    rendered, and the ball projects inside the middle 50 % of the frame in every still."""
+    code, report, output = rube_run(
+        EXAMPLES / "a12_follow_camera.py", tmp_path, blender_exe, extra=["--video"]
+    )
+    assert code == 0, output
+    assert report["status"] == "ok", report
+    assert report["artifacts"]["video"] == "video.mp4"
+    video = tmp_path / "video.mp4"
+    assert video.is_file() and video.stat().st_size > 1000
+    assert b"ftyp" in video.read_bytes()[:16]  # MP4 container
+    timing = report["timing"]
+    frames = still_frames(timing["frame_start"], timing["frame_end"])
+    proc = subprocess.run(
+        [str(blender_exe), "-b", str(tmp_path / "machine.blend"), "--python",
+         str(ROOT / "tests" / "blender" / "check_camera.py"), "--",
+         "--ball", "Ball_1", "--frames", *map(str, frames)],
+        capture_output=True, text=True, timeout=120,
+    )  # fmt: skip
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.count(": x=") == len(frames)

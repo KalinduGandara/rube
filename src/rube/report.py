@@ -49,6 +49,28 @@ def timing(duration: float) -> dict:
     }
 
 
+#: Number of still frames rendered per run (SPEC section 8 step 8).
+STILL_COUNT = 6
+
+
+def still_frames(frame_start: int, frame_end: int, count: int = STILL_COUNT) -> list[int]:
+    """Frame numbers of the preview stills: ``count`` evenly spaced, first and last included.
+
+    Args:
+        frame_start: First frame of the scene range.
+        frame_end: Last frame (inclusive).
+        count: Number of stills wanted.
+
+    Returns:
+        Strictly increasing frames; fewer than ``count`` when the range has fewer frames.
+    """
+    if count < 2 or frame_end <= frame_start:
+        return [frame_start]
+    span = frame_end - frame_start
+    # Rounding can repeat a frame only when span < count - 1; the set removes those repeats.
+    return sorted({frame_start + round(i * span / (count - 1)) for i in range(count)})
+
+
 def build_report(
     status: str,
     *,

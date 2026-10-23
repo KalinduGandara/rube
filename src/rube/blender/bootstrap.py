@@ -12,7 +12,7 @@ settings -> rigid body world -> build -> overlap check -> bake -> sample & analy
 exception becomes status ``internal_error`` with the traceback (SPEC section 9.1), and the
 process still exits 0 so the CLI reads the status from the report.
 
-Implements: FR-018 (Blender side), FR-019 - FR-025 orchestration.
+Implements: FR-018 (Blender side), FR-019 - FR-025 orchestration (rendering: FR-024).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from rube.blender import build, render, scene, simulate  # noqa: E402
 from rube.entities import Floor  # noqa: E402
 from rube.errors import error  # noqa: E402
 from rube.machine import FPS, Machine  # noqa: E402
-from rube.report import build_report, timing, write_report  # noqa: E402
+from rube.report import build_report, still_frames, timing, write_report  # noqa: E402
 
 BLEND_NAME = "machine.blend"
 
@@ -48,7 +48,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="rube.blender.bootstrap")
     parser.add_argument("--spec", required=True, help="absolute path of spec.json")
     parser.add_argument("--out", required=True, help="absolute output directory")
-    parser.add_argument("--video", action="store_true", help="render video.mp4 (milestone M4)")
+    parser.add_argument("--video", action="store_true", help="also render video.mp4")
     return parser.parse_args(args)
 
 
@@ -68,12 +68,11 @@ def run_pipeline(spec: dict, out_dir: Path, video: bool) -> dict:
     Args:
         spec: ``Machine.to_dict()`` output (already validated by the CLI).
         out_dir: Absolute output directory.
-        video: Requested video output (ignored until milestone M4, design D-21).
+        video: Also render ``video.mp4`` (the full frame range).
 
     Returns:
         Report with status ``ok``, ``invalid`` (overlap, nothing baked) or ``bake_failed``.
     """
-    del video  # rendering arrives in M4
     machine = Machine.from_dict(spec)
     # The CLI rejected errors already; keep its warnings (e.g. MASS_RATIO) in this report.
     issues = machine.validate()
@@ -84,6 +83,8 @@ def run_pipeline(spec: dict, out_dir: Path, video: bool) -> dict:
     scene.configure(sc, machine.frame_end)
     scene.add_rigid_body_world(sc)
     ctx = build.build_machine(machine, sc)
+    render.add_camera(sc, machine.camera)
+    render.configure_render(sc)
     blend = out_dir / BLEND_NAME
     artifacts = {"frames": [], "video": None, "blend": BLEND_NAME}
 
@@ -114,6 +115,13 @@ def run_pipeline(spec: dict, out_dir: Path, video: bool) -> dict:
         frame_start=sc.frame_start,
         floor_half_size=floor_half_size(machine),
     )
+    # Render after the bake and the sampling, before the save: the saved file keeps the
+    # render settings and camera (tests/blender/check_camera.py reads it back).
+    artifacts["frames"] = render.render_stills(
+        sc, still_frames(sc.frame_start, sc.frame_end), out_dir
+    )
+    if video:
+        artifacts["video"] = render.render_video(sc, out_dir)
     render.save_blend(sc, blend)
     return build_report(
         "ok",

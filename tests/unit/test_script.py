@@ -1,6 +1,10 @@
 """Unit tests for ``rube.script`` (FR-016: AST import guard, NO_MACHINE, SCRIPT_ERROR; NFR-006)."""
 
+import os
+import signal
 import textwrap
+import threading
+import time
 
 import pytest
 
@@ -252,3 +256,67 @@ def test_guard_documented_as_guard_rail_not_sandbox():
     """NFR-006: the module states the guard is a guard rail, not a sandbox."""
     doc = rube.script.__doc__.lower()
     assert "guard rail" in doc and "not a sandbox" in doc
+
+
+HANG = "while True:\n    pass\n"
+#: Swallows the first timeout signal; the limit must keep firing until the script stops.
+STUBBORN_HANG = """
+while True:
+    try:
+        while True:
+            pass
+    except BaseException:
+        pass
+"""
+
+
+@pytest.mark.parametrize("source", [HANG, STUBBORN_HANG], ids=["loop", "swallowing"])
+def test_script_time_limit(tmp_path, monkeypatch, source):
+    """FR-016 (T-019 review finding 2): a script running past the limit -> SCRIPT_ERROR."""
+    monkeypatch.setattr(rube.script, "SAFE_BUILTIN_NAMES", (*SAFE_NAMES, "BaseException"))
+    monkeypatch.setattr(rube.script, "SCRIPT_TIMEOUT_S", 0.2)
+    start = time.monotonic()
+    machine, (issue,) = load_machine(write(tmp_path, source))
+    assert time.monotonic() - start < 5
+    assert machine is None and issue.code == "SCRIPT_ERROR"
+    assert "0.2 s" in issue.message and "line" in issue.message
+
+
+def test_script_time_limit_is_a_fixed_30_s_and_disarmed_after(tmp_path):
+    """FR-016: the limit is the module constant 30 s; no timer is left running afterwards."""
+    assert rube.script.SCRIPT_TIMEOUT_S == 30
+    load_machine(write(tmp_path, GOOD))
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+    assert signal.getsignal(signal.SIGALRM) in (signal.SIG_DFL, signal.SIG_IGN, None)
+
+
+SAFE_NAMES = rube.script.SAFE_BUILTIN_NAMES
+
+
+@pytest.mark.parametrize(
+    "raised", ["KeyboardInterrupt", "SystemExit(3)", "GeneratorExit", "Custom"]
+)
+def test_base_exceptions_are_script_errors(tmp_path, monkeypatch, raised):
+    """FR-016 (T-019 review finding 4): any BaseException from the script -> SCRIPT_ERROR.
+
+    The curated builtins do not even offer these names, so they are added here to prove the
+    catch itself does not depend on that curation.
+    """
+    extra = ("KeyboardInterrupt", "SystemExit", "GeneratorExit", "BaseException")
+    monkeypatch.setattr(rube.script, "SAFE_BUILTIN_NAMES", (*SAFE_NAMES, *extra))
+    source = f"class Custom(BaseException):\n    pass\n\nraise {raised}\n"
+    machine, (issue,) = load_machine(write(tmp_path, source))
+    assert machine is None and issue.code == "SCRIPT_ERROR" and "line 4" in issue.message
+
+
+def test_real_interrupt_propagates(tmp_path, monkeypatch):
+    """FR-016: a real Ctrl-C while the script runs is not swallowed as SCRIPT_ERROR."""
+    monkeypatch.setattr(rube.script, "SCRIPT_TIMEOUT_S", 10)
+    timer = threading.Timer(0.2, os.kill, (os.getpid(), signal.SIGINT))
+    timer.start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            load_machine(write(tmp_path, HANG))
+    finally:
+        timer.cancel()
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler

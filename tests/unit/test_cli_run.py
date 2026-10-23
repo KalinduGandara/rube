@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+import rube.script
 from rube import cli
 from rube.report import read_report
 
@@ -252,3 +253,43 @@ def test_non_numeric_duration_is_invalid_not_internal_error(tmp_path, fake_blend
     report = read_report(out / "report.json")
     assert report["status"] == "invalid" and report["timing"] is None
     assert report["issues"][0]["code"] == "INVALID_ARGUMENT"
+
+
+def test_script_time_limit_writes_invalid_report(tmp_path, fake_blender, monkeypatch):
+    """FR-016/FR-018 (T-019 review finding 2): a hanging script -> invalid report, exit 2."""
+    argv_file = fake_blender("ok")
+    monkeypatch.setattr(rube.script, "SCRIPT_TIMEOUT_S", 0.2)
+    write_script(tmp_path, "while True:\n    pass\n")
+    code, out = run(tmp_path, "--timeout", "1")
+    assert code == 2
+    report = read_report(out / "report.json")
+    assert report["status"] == "invalid"
+    assert [i["code"] for i in report["issues"]] == ["SCRIPT_ERROR"]
+    assert not argv_file.exists()  # Blender never started
+    assert cli.main(["check", str(tmp_path / "machine.py")]) == 2
+
+
+def test_script_raising_keyboard_interrupt_writes_report(tmp_path, fake_blender):
+    """FR-016 (T-019 review finding 4): the reviewer's `raise KeyboardInterrupt` repro."""
+    fake_blender("ok")
+    write_script(tmp_path, "raise KeyboardInterrupt\n")
+    code, out = run(tmp_path)
+    assert code == 2
+    assert read_report(out / "report.json")["issues"][0]["code"] == "SCRIPT_ERROR"
+
+
+@pytest.mark.parametrize("target", ["check_script", "_launch"])
+def test_interrupt_still_writes_report(tmp_path, fake_blender, monkeypatch, target):
+    """FR-016 (T-019 review finding 4): Ctrl-C during `rube run` -> internal_error report
+    ("interrupted") is written, then the interrupt propagates."""
+    fake_blender("ok")
+    write_script(tmp_path)
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, target, interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run(tmp_path)
+    report = read_report(tmp_path / "out" / "report.json")
+    assert report["status"] == "internal_error" and "interrupted" in report["traceback"]

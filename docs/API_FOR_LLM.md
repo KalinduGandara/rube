@@ -4,7 +4,7 @@ Write ONE Python script that defines `machine = Machine(...)`. Check it with `ru
 (no Blender, instant, lists ALL problems), then `rube run script.py --out out/ [--video]`.
 Allowed imports: `rube` (and its public modules such as `rube.entities`), `math`, `random`
 only. No `__dunder__` attributes, `getattr`/`globals`/`vars`/`eval`/`exec`/`open`/`input`; only
-everyday builtins (`range`, `len`, `min`, `print`, ...).
+everyday builtins (`range`, `len`, `min`, `print`, ...); the script must finish within 30 s.
 Fix every `error` issue using its `hint`.
 
 ## Conventions

@@ -14,7 +14,8 @@ sees data) and runs ``Blender -b --factory-startup --python-exit-code 1 --python
 rube/blender/bootstrap.py -- --spec ... --out ... [--video]`` in its own process group, with
 stdout/stderr captured in ``DIR/blender.log``. The exit code follows the report status (0 ok,
 2 invalid, 3 bake_failed, 4 timeout, 1 internal_error), and ``report.json`` is written in
-every case: on timeout and when Blender dies without a report the CLI writes it itself.
+every case: on timeout, when Blender dies without a report, and on Ctrl-C (status
+``internal_error``, "interrupted", before the interrupt propagates) the CLI writes it itself.
 
 Implements: FR-017, FR-018 (and the CLI side of FR-016, FR-025, NFR-006).
 """
@@ -203,6 +204,13 @@ def cmd_run(path: str, out: str, video: bool = False, timeout: float = DEFAULT_T
     except Exception:  # framework bug: report it, never crash without a report (SPEC 9.1)
         report = build_report("internal_error", traceback=traceback.format_exc())
         return _finish(out_dir, report, start)
+    except BaseException as exc:
+        # Ctrl-C (or a SystemExit from deep inside): still leave a report behind (FR-016),
+        # then let the interrupt end the process as the user asked. `_launch` has already
+        # killed Blender; a report Blender wrote before dying is superseded by this one.
+        why = "interrupted" if isinstance(exc, KeyboardInterrupt) else traceback.format_exc()
+        _finish(out_dir, build_report("internal_error", traceback=why), start)
+        raise
 
 
 def build_parser() -> argparse.ArgumentParser:

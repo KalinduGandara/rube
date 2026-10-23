@@ -18,6 +18,11 @@ re-checks every import at run time and hands out *public views* of ``rube`` and 
 (their ``__all__`` only): the real ``rube`` package also carries every submodule already
 loaded (``rube.cli`` in the CLI) and ``random`` keeps ``os`` as ``random._os`` (design D-28).
 
+Execution is limited to ``SCRIPT_TIMEOUT_S`` (30 s, fixed) of wall time; a script that runs
+longer is stopped and reported as ``SCRIPT_ERROR``. Any exception the script raises, including
+``BaseException`` subclasses (``SystemExit``, a ``KeyboardInterrupt`` it raises itself), is
+``SCRIPT_ERROR``; only a real Ctrl-C propagates (design D-29).
+
 This is still a **guard rail, not a sandbox**: it catches an LLM reaching for the filesystem
 or Blender by mistake and closes the obvious escape hatches, but determined code can get
 around it (``str.format`` can still *read* attributes, for one). Run untrusted scripts in a
@@ -32,7 +37,9 @@ import ast
 import builtins
 import importlib
 import pkgutil
+import signal
 import sys
+import threading
 import traceback
 import types
 from pathlib import Path
@@ -40,6 +47,9 @@ from pathlib import Path
 from rube.errors import Issue, RubeValidationError, error
 from rube.machine import Machine
 
+#: Wall-clock limit (s) on executing an author script (FR-016). Fixed, not configurable: a
+#: machine description runs in milliseconds, so 30 s only ever means an endless loop.
+SCRIPT_TIMEOUT_S = 30.0
 #: Public API modules of the ``rube`` package an author script may import (design D-28).
 PUBLIC_RUBE_MODULES = (
     "rube",
@@ -194,7 +204,7 @@ def safe_builtins() -> dict:
     }
 
 
-def _script_error(exc: BaseException, path: Path) -> Issue:
+def _script_error(exc: BaseException, path: Path, hint: str | None = None) -> Issue:
     """``SCRIPT_ERROR`` naming the last traceback frame inside the user script."""
     frames = [f for f in traceback.extract_tb(exc.__traceback__) if f.filename == str(path)]
     where = f" at line {frames[-1].lineno}: {frames[-1].line}" if frames else ""
@@ -204,8 +214,93 @@ def _script_error(exc: BaseException, path: Path) -> Issue:
         "SCRIPT_ERROR",
         None,
         f"{path.name}{where} -> {message}",
-        f"fix {line_hint} (see the error above)",
+        hint or f"fix {line_hint} (see the error above)",
     )
+
+
+class ScriptTimeout(BaseException):
+    """Raised inside an author script that ran longer than ``SCRIPT_TIMEOUT_S``.
+
+    A ``BaseException`` so that the author's ``except Exception`` cannot swallow it.
+    """
+
+
+class _ExecutionLimits:
+    """Context manager arming the script time limit and marking real Ctrl-C (design D-29).
+
+    Time limit: ``SIGALRM`` via ``setitimer`` in the main thread -- the simplest mechanism that
+    stops a pure-Python loop without moving the script (and the ``Machine`` it builds) into
+    another process. On expiry the handler raises ``ScriptTimeout`` *and* installs a trace
+    function that raises it again on every line executed in the script, so a script that
+    swallows the first one with ``except BaseException: pass`` is stopped at the ``pass``;
+    the timer keeps re-firing every ``_REFIRE_S`` because CPython drops a trace function
+    that raises. A
+    single long C call (``10 ** 10 ** 9``) only sees the signal when it returns: accepted
+    (guard rail, NFR-006). Off the main thread (no signals there) the script runs unlimited.
+
+    Interrupts: ``SIGINT`` gets a handler that records the interrupt before raising
+    ``KeyboardInterrupt``, so ``load_machine`` can tell a real Ctrl-C (re-raised) from a
+    script raising ``KeyboardInterrupt`` itself (feedback). Handlers, timer and trace function
+    are restored on exit.
+    """
+
+    #: Interval (s) at which the timer re-fires (re-raising, re-tracing) after expiry.
+    _REFIRE_S = 0.05
+
+    def __init__(self, script: Path) -> None:
+        self.interrupted = False
+        self._script = str(script)
+        self._active = False
+        self._saved: tuple | None = None
+
+    def _timeout(self) -> ScriptTimeout:
+        return ScriptTimeout(f"the script did not finish within {SCRIPT_TIMEOUT_S:g} s")
+
+    def _trace(self, frame, event, _arg):
+        """Global and local trace function after expiry: fail every line of the script."""
+        if frame.f_code.co_filename != self._script:
+            return None  # library frames run untraced; control returns to a traced frame
+        # Only "line": raising on the "exception" event of the timeout itself would happen
+        # inside the script's try body (and be caught), and CPython unsets a trace function
+        # that raises -- the re-firing timer re-installs it.
+        if self._active and event == "line":
+            raise self._timeout()
+        return self._trace
+
+    def _on_alarm(self, _signum, frame) -> None:
+        if not self._active:
+            return
+        sys.settrace(self._trace)  # frames entered from now on
+        while frame is not None:  # frames already running in the script
+            if frame.f_code.co_filename == self._script:
+                frame.f_trace_lines = True
+                frame.f_trace = self._trace
+            frame = frame.f_back
+        raise self._timeout()
+
+    def _on_interrupt(self, _signum, _frame) -> None:
+        self.interrupted = True
+        raise KeyboardInterrupt
+
+    def __enter__(self) -> _ExecutionLimits:
+        if threading.current_thread() is threading.main_thread():
+            self._saved = (
+                signal.signal(signal.SIGALRM, self._on_alarm),
+                signal.signal(signal.SIGINT, self._on_interrupt),
+                sys.gettrace(),
+            )
+            self._active = True
+            signal.setitimer(signal.ITIMER_REAL, SCRIPT_TIMEOUT_S, self._REFIRE_S)
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        # Deactivate first: an alarm landing between here and the disarm must not raise.
+        self._active = False
+        if self._saved is not None:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, self._saved[0])
+            signal.signal(signal.SIGINT, self._saved[1])
+            sys.settrace(self._saved[2])
 
 
 def load_machine(path: str | Path) -> tuple[Machine | None, list[Issue]]:
@@ -239,12 +334,22 @@ def load_machine(path: str | Path) -> tuple[Machine | None, list[Issue]]:
         "__file__": str(path),
         "__builtins__": safe_builtins(),
     }
+    limits = _ExecutionLimits(path)
     try:
-        # compile with the real path so traceback frames can be matched to the script.
-        exec(compile(source, str(path), "exec"), namespace)  # noqa: S102 - guarded above
+        with limits:
+            # compile with the real path so traceback frames can be matched to the script.
+            exec(compile(source, str(path), "exec"), namespace)  # noqa: S102 - guarded above
     except RubeValidationError as exc:
         return None, [*exc.issues, _script_error(exc, path)]
-    except (Exception, SystemExit) as exc:  # author mistakes of any kind are feedback
+    except ScriptTimeout as exc:
+        line = _script_error(exc, path).hint.removeprefix("fix ").split(" (")[0]
+        hint = f"the script must finish within {SCRIPT_TIMEOUT_S:g} s; look for an endless loop"
+        return None, [_script_error(exc, path, f"{hint} around {line}")]
+    except KeyboardInterrupt as exc:
+        if limits.interrupted:  # a real Ctrl-C: the user wants out, not feedback
+            raise
+        return None, [_script_error(exc, path)]
+    except BaseException as exc:  # author mistakes of any kind (SystemExit too) are feedback
         return None, [_script_error(exc, path)]
     machine = namespace.get("machine")
     if not isinstance(machine, Machine):

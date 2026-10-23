@@ -27,6 +27,7 @@ Append one line per completed task: `YYYY-MM-DD T-NNN <summary> — <tests> — 
 - 2026-10-24 T-019 review finding 2 and 4: author scripts stop after a fixed 30 s (SIGALRM + line-trace escalation, SCRIPT_ERROR, report written); BaseException from the script is SCRIPT_ERROR, real Ctrl-C propagates and rube run still writes an internal_error "interrupted" report (D-29).
 - 2026-10-24 T-019 review finding 7 and 9: rube run removes stale known artifacts (frames/, video.mp4, machine.blend, spec.json, blender.log, report.json; nothing else) at start; --timeout must be a finite number > 0 (D-30).
 - 2026-10-24 T-019 review finding 5: tests/blender/check_scene.py (run in Blender on machine.blend) asserts FR-019 world/units/cache, FR-020 rigid body fields and custom props, FR-002 names, FR-007 deactivation flags, FR-012 hinge, FR-014 follow-camera constraints, FR-024 H264; expectations built from DEFAULTS/spec text; wired into A1, A3, A7, A12 without extra Blender runs of the scenarios.
+- 2026-10-24 T-019 review finding 6: layering scanners resolve import aliases, flag getattr on bpy/context, reset temp_override state in nested def/lambda, forbid Layer-1 importlib and rube.blender imports (self-test per pattern); real violation fixed: script.py import guard now wraps the builtin __import__ instead of importlib.
 
 ## Physics default changes (assumption A-1)
 

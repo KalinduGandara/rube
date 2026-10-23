@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import ast
 import builtins
-import importlib
 import pkgutil
 import signal
 import sys
@@ -181,6 +180,9 @@ def _public_view(module: types.ModuleType) -> types.ModuleType:
 #: Modules a script receives as a public view (``_public_view``) instead of the real one.
 _VIEWED_MODULES = ("rube", "random")
 
+#: The real ``__import__``, which the guard wraps (the guard only ever sees allowed names).
+_REAL_IMPORT = builtins.__import__
+
 
 def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: A002
     """``__import__`` for author scripts: allowed modules only, ``rube``/``random`` as views.
@@ -190,7 +192,9 @@ def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):  # n
     """
     if level or name not in ALLOWED_MODULES:
         raise ImportError(f"import of {name!r} is not allowed in a machine script")
-    module = importlib.import_module(name)
+    # A non-empty fromlist makes the builtin return the leaf module (as import_module does).
+    # Layer 1 must not import importlib at all (NFR-001 scan, review finding 6).
+    module = _REAL_IMPORT(name, fromlist=("_",))
     if not fromlist:
         module = sys.modules[name.split(".")[0]]
     return _public_view(module) if module.__name__ in _VIEWED_MODULES else module

@@ -30,7 +30,7 @@ Execution: milestones run sequentially as one workflow, one agent per milestone
 - [x] T-005: `entities.py`: PhysicsProps, `DEFAULTS`, `COLORS`, Entity, Floor, Ball, Block, Domino (tilt, deactivation), anchors, `validate()`, `body()` → BodySpec.
   - Requirements: FR-004–FR-007, FR-013
   - Done when: `test_entities.py` covers defaults, density mass, anchors, tilt keeps front edge on ground, deactivation flags, OUT_OF_RANGE / INVALID_ARGUMENT / TOO_SMALL.
-- [ ] T-006: `machine.py`: registry, groups, auto names, auto floor, `validate()` (NAME_DUPLICATE, OUT_OF_RANGE duration, TOO_MANY_BODIES, OUTSIDE_FLOOR, MASS_RATIO), `bodies()`/`constraints()`.
+- [x] T-006: `machine.py`: registry, groups, auto names, auto floor, `validate()` (NAME_DUPLICATE, OUT_OF_RANGE duration, TOO_MANY_BODIES, OUTSIDE_FLOOR, MASS_RATIO), `bodies()`/`constraints()`.
   - Requirements: FR-001, FR-002, FR-013
   - Done when: `test_machine.py` covers every listed code and build order.
 - [ ] T-007: `camera.py` (static, follow, auto_frame) + `to_dict`/`from_dict`.
